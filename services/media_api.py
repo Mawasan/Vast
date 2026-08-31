@@ -178,6 +178,7 @@ async def video(
             "--base_seed", str(seed),
             "--save_file", str(out_path),
             "--offload_model", "True",
+            "--convert_model_dtype",
             "--t5_cpu",
         ]
         if sample_steps is not None:

@@ -1,0 +1,7 @@
+# Pinned source revision avoids silently changing Chatterbox at a later provision.
+torch>=2.4,<2.9
+torchaudio>=2.4,<2.9
+git+https://github.com/resemble-ai/chatterbox.git@5de7a54aa4e5e2baadb0182dde554908b48b85c2
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+python-multipart>=0.0.9,<1

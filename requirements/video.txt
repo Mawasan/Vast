@@ -1,0 +1,16 @@
+# Wan2.2's published constraints, fixed to a compatible range. flash-attn is
+# deliberately omitted: Wan supports PyTorch SDPA and a source build can fail.
+torch>=2.4,<2.9
+torchvision>=0.19,<0.24
+torchaudio>=2.4,<2.9
+opencv-python>=4.9,<5
+diffusers>=0.31,<1
+transformers>=4.49,<=4.51.3
+tokenizers>=0.20.3,<0.22
+accelerate>=1.1,<2
+tqdm>=4.66,<5
+imageio[ffmpeg]>=2.34,<3
+easydict>=1.13,<2
+ftfy>=6.2,<7
+dashscope>=1.20,<2
+numpy>=1.23.5,<2

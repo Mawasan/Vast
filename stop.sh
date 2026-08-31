@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-set -euo pipefail
-ROOT=${SAYURI_ROOT:-/workspace/sayuri}
-for f in "$ROOT/vllm.pid" "$ROOT/media.pid"; do
-  if [[ -f "$f" ]]; then
-    kill "$(cat "$f")" 2>/dev/null || true
-    rm -f "$f"
-  fi
+set -Eeuo pipefail
+ROOT=${SAYURI_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}
+for name in vllm media; do
+  pid_file="$ROOT/$name.pid"; [[ -s $pid_file ]] || continue; pid=$(<"$pid_file")
+  if kill -0 "$pid" 2>/dev/null; then kill "$pid" || true; fi
+  rm -f "$pid_file"
 done

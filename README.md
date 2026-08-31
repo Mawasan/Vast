@@ -1,73 +1,12 @@
-# Sayuri Vast.ai Template
+# Sayuri on Vast.ai
 
-This package is a ready-to-build Vast.ai stack for comparing the same Sayuri core in two modes:
+This repository provisions Sayuri onto a normal Vast PyTorch instance; it does not require building or publishing a custom Docker image. `core` starts only the OpenAI-compatible Qwen API on GPUs 0 and 1. `full` additionally starts the media API on GPU 2. The Qwen process receives `CUDA_VISIBLE_DEVICES=0,1`, so it cannot reserve GPU 2. The media process receives only GPU 2, where Chatterbox is loaded on demand and explicitly unloaded before Wan begins.
 
-- **CORE**: Qwen3.5-122B-A10B-FP8 only.
-- **FULL**: the same Qwen core + Chatterbox Multilingual V3 TTS + Wan2.2 T2V-A14B video generation.
+## Vast.ai settings
 
-## Target host
+Choose a current Vast PyTorch image with CUDA support for A100, SSH enabled, and a three-GPU machine with exactly 3 x A100 80 GB. Set disk to 600 GB (500 GB is an absolute lower bound), RAM to at least 256 GB and preferably 384 GB, and expose TCP ports `8000` and `8100`. Do not expose these ports publicly without a firewall or `SAYURI_API_KEY`.
 
-Recommended FULL host:
-
-- **3x A100 80 GB = 240 GB VRAM**
-- **256 GB system RAM minimum**, 384 GB preferred for comfortable video CPU-offload
-- **500 GB disk** minimum
-- fast NVMe and strong download bandwidth
-
-GPU assignment:
-
-- GPU 0 + 1: Qwen3.5-122B-A10B-FP8 via vLLM, tensor parallel = 2
-- GPU 2: media GPU. Chatterbox is loaded for TTS; before a Wan video job, TTS is unloaded so Wan can use almost the whole 80 GB GPU.
-
-The official Qwen FP8 checkpoint is about 127 GB. A100/Ampere can store FP8 weights, but vLLM executes them as weight-only W8A16 rather than native FP8 compute. That is expected on A100.
-
-## Ports
-
-- `8000`: vLLM OpenAI-compatible API (`/v1`)
-- `8100`: Sayuri media API
-  - `GET /health`
-  - `POST /tts`
-  - `POST /video`
-
-## Modes
-
-### CORE
-
-Set:
-
-```bash
-SAYURI_MODE=core
-```
-
-Use a 2x A100 80 GB host. Only Qwen starts.
-
-### FULL
-
-Set:
-
-```bash
-SAYURI_MODE=full
-```
-
-Use a 3x A100 80 GB host. Qwen + media API start.
-
-## Vast.ai template settings
-
-After pushing the Docker image to a registry, use these values in Vast:
-
-- Image: `YOUR_REGISTRY/sayuri-vast:latest`
-- Launch mode: SSH
-- Direct SSH: enabled
-- Disk: 500 GB
-- Ports: `8000`, `8100`
-- On-start:
-
-```bash
-env >> /etc/environment
-bash /workspace/sayuri/start.sh
-```
-
-Environment variables:
+Set the instance environment to:
 
 ```text
 SAYURI_MODE=full
@@ -75,112 +14,55 @@ QWEN_MODEL=Qwen/Qwen3.5-122B-A10B-FP8
 LLM_GPUS=0,1
 MEDIA_GPU=2
 MAX_MODEL_LEN=32768
-GPU_MEMORY_UTILIZATION=0.92
+GPU_MEMORY_UTILIZATION=0.90
 PRELOAD_MODELS=1
+HF_HOME=/workspace/hf-cache
 ```
 
-For a private API, add `SAYURI_API_KEY` in your **Vast account environment settings**, not in a public template.
+For CORE, use a 2 x A100 80 GB host and set `SAYURI_MODE=core`; do not set `MEDIA_GPU`. If you use an API key, set `SAYURI_API_KEY` only in Vast’s private environment-variable UI. It is never stored in this repository.
 
-## Build
-
-From the folder containing this package:
+The Vast on-start command is intentionally simple because provisioning is long-running and should be watched over SSH:
 
 ```bash
-docker build -t YOUR_REGISTRY/sayuri-vast:latest .
-docker push YOUR_REGISTRY/sayuri-vast:latest
+cd /workspace/sayuri && bash start.sh
 ```
 
-Then replace `YOUR_REGISTRY` in `vast-template.json` and create the Vast template.
-
-## First launch
-
-The first image build/provision downloads and installs a lot. Model files are intentionally not baked into the Docker image. They go to `/workspace` so a persistent Vast volume/cache can survive container recreation.
-
-Important paths:
-
-```text
-/workspace/hf-cache                 Qwen/Hugging Face cache
-/workspace/models/Wan2.2-T2V-A14B  Wan checkpoint
-/workspace/sayuri/logs              service logs
-/workspace/sayuri/outputs           temporary media outputs
-```
-
-Check status:
+## First start
 
 ```bash
-bash /workspace/sayuri/status.sh
+cd /workspace
+git clone https://github.com/Mawasan/Vast.git /workspace/sayuri
+cd /workspace/sayuri
+bash provision.sh
+bash start.sh
+bash test.sh
 ```
 
-## Test Qwen
+The Hugging Face cache is `/workspace/hf-cache`; Wan weights are `/workspace/models/Wan2.2-T2V-A14B`; logs and temporary media are under `/workspace/sayuri/logs` and `/workspace/sayuri/outputs`. Re-running `provision.sh` reuses environments and cached models; Wan is marked complete only after a successful download.
+
+## API checks
 
 ```bash
-curl http://127.0.0.1:8000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model":"Qwen/Qwen3.5-122B-A10B-FP8",
-    "messages":[{"role":"user","content":"Antworte kurz auf Deutsch: Wer bist du?"}],
-    "max_tokens":100
-  }'
+curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"Qwen/Qwen3.5-122B-A10B-FP8","messages":[{"role":"user","content":"Antworte kurz auf Deutsch: Wer bist du?"}],"max_tokens":100}'
+curl -X POST http://127.0.0.1:8100/tts -F 'text=Hallo. Ich bin Sayuri.' -F 'language_id=de' -o sayuri.wav
+curl -X POST http://127.0.0.1:8100/video -F 'prompt=cinematic rainy neon city at night' -F 'size=1280*720' -F 'frame_num=81' -F 'seed=42' -o sayuri-video.mp4
 ```
 
-If `SAYURI_API_KEY` is set, also send:
+With `SAYURI_API_KEY`, add `-H 'Authorization: Bearer YOUR_KEY'` to each request. Video is serialized with TTS and uses Wan’s documented `--offload_model True`, `--convert_model_dtype`, and `--t5_cpu` options to preserve VRAM headroom.
 
-```text
-Authorization: Bearer <key>
-```
-
-## Test TTS
+## Operations
 
 ```bash
-curl -X POST http://127.0.0.1:8100/tts \
-  -F 'text=Hallo. Ich bin Sayuri.' \
-  -F 'language_id=de' \
-  -o sayuri.wav
+bash status.sh
+tail -f /workspace/sayuri/logs/vllm.log
+tail -f /workspace/sayuri/logs/media.log
+nvidia-smi
+watch -n 1 nvidia-smi
+bash stop.sh
 ```
 
-With a voice reference:
+`test.sh` waits up to six minutes for `/v1/models` and, in FULL mode, `/health`; it fails with the relevant log location if either API does not become healthy.
 
-```bash
-curl -X POST http://127.0.0.1:8100/tts \
-  -F 'text=Hallo. Ich bin Sayuri.' \
-  -F 'language_id=de' \
-  -F 'reference_audio=@sayuri-reference.wav' \
-  -o sayuri.wav
-```
+## Compatibility and remaining hardware validation
 
-## Test video
-
-Wan A14B is intentionally invoked on demand. This frees the TTS model first and uses CPU offload when necessary.
-
-```bash
-curl -X POST http://127.0.0.1:8100/video \
-  -F 'prompt=cinematic anime woman with dark blue hair walking through a rainy neon city, consistent face, natural motion' \
-  -F 'size=1280*720' \
-  -F 'frame_num=81' \
-  -F 'seed=42' \
-  -o sayuri-video.mp4
-```
-
-Video generation can be much slower than chat and TTS because the A14B checkpoint is large and may offload parts to CPU.
-
-## Comparing CORE vs FULL fairly
-
-Use the **same Qwen checkpoint, same prompt set, same context length and same vLLM settings** in both runs. Measure:
-
-- Qwen startup VRAM
-- idle VRAM
-- tokens/sec
-- time-to-first-token
-- TTS latency / real-time factor
-- video generation time
-- peak GPU 2 VRAM
-- total Vast cost per hour
-
-That isolates the cost of voice/video instead of accidentally comparing different LLM configurations.
-
-## Notes
-
-- `MAX_MODEL_LEN=32768` is deliberate. Do not start with the native maximum context unless you have measured KV-cache headroom.
-- Qwen is run on two GPUs. Do not put Wan on GPU 0 or 1 in FULL mode.
-- For development, you can swap Wan A14B for a smaller video checkpoint by changing the provisioning/model variables, but the default here is the stronger A14B path.
-- The package is a deployment scaffold, not a claim that every future upstream release will remain dependency-compatible. Qwen/vLLM, Chatterbox and Wan evolve quickly, which is why their Python environments are isolated.
+The Qwen model card specifically requires vLLM main/nightly and documents `--reasoning-parser qwen3` plus `--tool-call-parser qwen3_coder`; the provisioner records the resolved vLLM version. Chatterbox is pinned to an upstream commit, and Wan2.2 is checked out at a pinned upstream commit with its published dependency ranges. The official Qwen example shows eight GPUs for its full 262K context. This template deliberately requests 32K and tensor parallel size two, but whether the 122B FP8 multimodal checkpoint, runtime overhead, and useful KV cache fit robustly in 2 x A100 80 GB must be measured on the target instance before relying on it in production. Wan 720p A14B can still OOM or be slow depending on its runtime versions and CPU offload bandwidth.
