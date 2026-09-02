@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "defaultModelId": "illustrious-xl",
+  "models": [
+    {
+      "id": "illustrious-xl",
+      "displayName": "Illustrious XL v1.1",
+      "family": "SDXL",
+      "role": "general-anime-and-character-cards",
+      "source": "https://huggingface.co/OnomaAIResearch/Illustrious-XL-v1.1",
+      "workflowId": "sdxl-anime",
+      "recommended": { "width": 832, "height": 1216, "sampler": "dpmpp_2m_sde", "scheduler": "karras", "steps": 30, "cfg": 5.5 },
+      "vramGb": 12,
+      "loraCompatibility": "SDXL and Illustrious LoRAs only; do not use Pony, Flux, or NoobAI LoRAs.",
+      "licenseNotes": "Review the upstream OpenRAIL++-M model card before commercial use.",
+      "files": [
+        {
+          "path": "checkpoints/Illustrious-XL-v1.1.safetensors",
+          "url": "https://huggingface.co/OnomaAIResearch/Illustrious-XL-v1.1/resolve/main/Illustrious-XL-v1.1.safetensors"
+        }
+      ]
+    },
+    {
+      "id": "animagine-xl-4",
+      "displayName": "Animagine XL 4.0",
+      "family": "SDXL",
+      "role": "polished-anime-illustration",
+      "source": "https://huggingface.co/cagliostrolab/animagine-xl-4.0",
+      "workflowId": "sdxl-anime",
+      "recommended": { "width": 1024, "height": 1024, "sampler": "dpmpp_2m_sde", "scheduler": "karras", "steps": 28, "cfg": 5.0 },
+      "vramGb": 12,
+      "loraCompatibility": "SDXL LoRAs only; verify the individual LoRA's base model and license.",
+      "licenseNotes": "Review the upstream OpenRAIL++-M model card before commercial use.",
+      "files": [
+        {
+          "path": "checkpoints/animagine-xl-4.0-opt.safetensors",
+          "url": "https://huggingface.co/cagliostrolab/animagine-xl-4.0/resolve/main/animagine-xl-4.0-opt.safetensors"
+        }
+      ]
+    }
+  ]
+}
