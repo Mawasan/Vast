@@ -11,7 +11,7 @@
       "workflowId": "sdxl-anime",
       "recommended": { "width": 832, "height": 1216, "sampler": "dpmpp_2m_sde", "scheduler": "karras", "steps": 30, "cfg": 5.5 },
       "vramGb": 12,
-      "loraCompatibility": "SDXL and Illustrious LoRAs only; do not use Pony, Flux, or NoobAI LoRAs.",
+      "loraCompatibility": "SDXL and Illustrious LoRAs only; do not use LoRAs from incompatible model families.",
       "licenseNotes": "Review the upstream OpenRAIL++-M model card before commercial use.",
       "files": [
         {
