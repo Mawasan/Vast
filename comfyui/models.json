@@ -16,7 +16,7 @@
       "files": [
         {
           "path": "checkpoints/Illustrious-XL-v1.1.safetensors",
-          "url": "https://huggingface.co/OnomaAIResearch/Illustrious-XL-v1.1/resolve/main/Illustrious-XL-v1.1.safetensors"
+          "url": "https://huggingface.co/OnomaAIResearch/Illustrious-XL-v1.1/resolve/8d966ec810874502d56a22ec9130dab6ef74c5ff/Illustrious-XL-v1.1.safetensors"
         }
       ]
     },
@@ -34,7 +34,7 @@
       "files": [
         {
           "path": "checkpoints/animagine-xl-4.0-opt.safetensors",
-          "url": "https://huggingface.co/cagliostrolab/animagine-xl-4.0/resolve/main/animagine-xl-4.0-opt.safetensors"
+          "url": "https://huggingface.co/cagliostrolab/animagine-xl-4.0/resolve/2b7c1b397761bf5bd3cc42e5b39ec99314a75a96/animagine-xl-4.0-opt.safetensors"
         }
       ]
     }

@@ -1,19 +1,83 @@
-# ComfyUI anime model set
+# Vast Anime: Illustrious + Animagine
 
-This directory is independent of Sayuri. It is a directly usable Vast instance template: the on-start command below clones this repository, installs the pinned ComfyUI runtime, downloads the manifest, and starts ComfyUI on port 8188. It is also the single source of truth for the ComfyUI checkpoints a Vast worker is allowed to advertise or use.
+Standalone ComfyUI template for Vast.ai. This does not change Marinara or the
+Sayuri services in the repository root.
 
-## Vast template
+## Start from the saved template
 
-Choose a current **Vast PyTorch** image with an NVIDIA GPU, at least 24 GB VRAM, 80 GB disk, SSH enabled, and port `8188` exposed. Set this as the Vast **On-start command**:
+1. In Vast, open **Templates → My Templates → Vast Anime - Illustrious + Animagine**.
+2. Select it, choose a compatible NVIDIA GPU with at least 24 GB VRAM and
+   keep the recommended 100 GB disk. **Rent starts billing.**
+3. Wait for provisioning to download the two checkpoints (about 14 GB total).
+4. Open the instance's **Open** button, then **ComfyUI** in the Instance Portal.
+5. Open **Workflows** and choose **illustrious-xl** or **animagine-xl-4**.
+   Edit the positive prompt and click **Run**.
 
-```bash
-if [ ! -d /workspace/vast/.git ]; then git clone https://github.com/Mawasan/Vast.git /workspace/vast; fi; VAST_REPO_ROOT=/workspace/vast bash /workspace/vast/comfyui/onstart.sh
+Images are saved under `/workspace/ComfyUI/output/Vast/`.
+Models and outputs survive stopping/restarting the same instance but are not
+backed up by this template. Download important files before destroying it.
+
+## Template configuration
+
+- Image: `vastai/comfy:v0.30.0-cuda-13.2-py312` (official Vast ComfyUI image)
+- Launch mode: Jupyter + SSH; on-start: `entrypoint.sh`
+- Disk: 100 GB; private template
+- Filters: `compute_cap>=800 cuda_max_good>=13 gpu_ram>=24 cpu_arch=amd64`
+- Exposed ports: 1111 (portal), 8080 (Jupyter), 8188 (ComfyUI)
+- ComfyUI uses internal port 18188 behind Vast's authenticated proxy.
+  Do not expose 18188 or replace the on-start script with the generic launcher.
+- `OPEN_BUTTON_PORT=1111`, `OPEN_BUTTON_TOKEN=1`
+- `COMFYUI_ARGS=--disable-auto-launch --disable-xformers --port 18188 --enable-cors-header`
+- `DATA_DIRECTORY=/workspace/`, `JUPYTER_DIR=/`
+- `PORTAL_CONFIG=localhost:1111:11111:/:Instance Portal|localhost:8188:18188:/:ComfyUI|localhost:8080:18080:/:Jupyter`
+- `PROVISIONING_COMFYUI_WORKFLOWS`: the two raw GitHub workflow URLs separated
+  by a semicolon. Use the same published Git commit for both URLs:
+
+```text
+https://raw.githubusercontent.com/Mawasan/Vast/<COMMIT>/comfyui/workflows/illustrious-xl.json;https://raw.githubusercontent.com/Mawasan/Vast/<COMMIT>/comfyui/workflows/animagine-xl-4.json
 ```
 
-For the first run, use 100 GB disk and wait for the two 6–7 GB checkpoints to download. On subsequent starts they remain under `/workspace/ComfyUI/models` as long as the instance disk persists. Open `http://<instance-ip>:8188` through Vast's exposed-port UI. ComfyUI has no built-in authentication: keep this port private or restrict it through Vast/firewall access controls.
+The saved template pins those URLs to a commit. Later repository changes do not
+silently change the template; update its URLs deliberately to publish a new version.
 
-The active set is deliberately small: Illustrious XL v1.1 for character cards, Danbooru-oriented anime prompts, and complex scenes; Animagine XL 4.0 for clean, polished illustrations. NoobAI is not installed or listed. Each download is written as a `.part` file, resumes when possible, and becomes active only after an atomic rename.
+The official image's workflow provisioner reads `nodes[].properties.models`,
+downloads the declared checkpoints and saves the workflows to
+`/workspace/ComfyUI/user/default/workflows/`. Model URLs are pinned to upstream
+Hugging Face revisions and were checked as public/ungated. No access token or
+custom nodes are required. Supervisor starts ComfyUI after provisioning.
+See the [official workflow provisioner documentation](https://github.com/vast-ai/base-image/blob/main/ROOT/opt/instance-tools/lib/provisioner/README.md).
 
-For recurring characters, train or install one compatible character LoRA per character (normally strength 0.6–0.8) in `ComfyUI/models/loras`, retain curated reference images outside the ephemeral worker, and use IP-Adapter reference conditioning. Add OpenPose or Depth ControlNet for difficult poses and multi-character layout. IP-Adapter and ControlNet are deliberately not installed by this small checkpoint script because their custom-node and auxiliary-model versions must be pinned together in the worker image.
+## Models and LoRAs
 
-Both checkpoints are roughly 6–7 GB. Plan 24 GB VRAM for comfortable SDXL at 1024px with identity or pose conditioning; 48 GB is a better serverless target for concurrent or multi-character work. Bake ComfyUI and version-pinned custom nodes into a worker image, then attach persistent model storage or bake this manifest's exact artifacts into a versioned image before making an endpoint live.
+Illustrious XL v1.1 and Animagine XL 4.0 opt are the only requested checkpoints.
+NoobAI is not provisioned. Each workflow includes a positive/negative prompt,
+appropriate SDXL dimensions, a sampler, VAE decoding and image saving.
+Seeds are fixed for repeatable comparisons; change the seed for variations.
+
+Existing LoRA files are not removed. Place compatible LoRAs in
+`/workspace/ComfyUI/models/loras` and add a Load LoRA node when needed.
+These starter workflows do not include trained character identities, IP-Adapter,
+ControlNet, or a character-consistency guarantee.
+
+## Validation and troubleshooting
+
+Run `python -B -m unittest discover -s comfyui/tests -v` locally to check graph
+connections, manifest alignment and sampler settings without a GPU.
+These checks do not replace an actual GPU boot/image-generation test.
+
+In the instance terminal:
+
+```bash
+supervisorctl status comfyui
+supervisorctl tail -f comfyui
+```
+
+If the checkpoint download fails, inspect the provisioning logs before retrying.
+Do not mark an instance ready until provisioning finishes and a test image works.
+
+## Older generic-image scripts
+
+`onstart.sh`, `provision.sh`, `start.sh`, `stop.sh`, and
+`provision-models.py` are retained for the earlier generic-PyTorch setup.
+**They are not used by this template.** In particular, do not run `start.sh`
+alongside the official image's Supervisor-managed ComfyUI service.
