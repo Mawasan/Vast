@@ -1,6 +1,16 @@
 # ComfyUI anime model set
 
-This directory is independent of Sayuri. It is the single source of truth for the ComfyUI checkpoints a Vast worker is allowed to advertise or use. Run `bash comfyui/provision-models.sh` inside a ComfyUI worker after setting `COMFYUI_DIR` when it is not `/workspace/ComfyUI`.
+This directory is independent of Sayuri. It is a directly usable Vast instance template: the on-start command below clones this repository, installs the pinned ComfyUI runtime, downloads the manifest, and starts ComfyUI on port 8188. It is also the single source of truth for the ComfyUI checkpoints a Vast worker is allowed to advertise or use.
+
+## Vast template
+
+Choose a current **Vast PyTorch** image with an NVIDIA GPU, at least 24 GB VRAM, 80 GB disk, SSH enabled, and port `8188` exposed. Set this as the Vast **On-start command**:
+
+```bash
+if [ ! -d /workspace/vast/.git ]; then git clone https://github.com/Mawasan/Vast.git /workspace/vast; fi; VAST_REPO_ROOT=/workspace/vast bash /workspace/vast/comfyui/onstart.sh
+```
+
+For the first run, use 100 GB disk and wait for the two 6–7 GB checkpoints to download. On subsequent starts they remain under `/workspace/ComfyUI/models` as long as the instance disk persists. Open `http://<instance-ip>:8188` through Vast's exposed-port UI. ComfyUI has no built-in authentication: keep this port private or restrict it through Vast/firewall access controls.
 
 The active set is deliberately small: Illustrious XL v1.1 for character cards, Danbooru-oriented anime prompts, and complex scenes; Animagine XL 4.0 for clean, polished illustrations. NoobAI is not installed or listed. Each download is written as a `.part` file, resumes when possible, and becomes active only after an atomic rename.
 
