@@ -16,6 +16,15 @@ export type WorkergroupSummary = {
   templateId: number | null;
   templateHash: string | null;
   gpuRam: number | null;
+  searchQuery: unknown;
+};
+
+const SINGLE_GPU_SEARCH = {
+  verified: { eq: true },
+  rentable: { eq: true },
+  rented: { eq: false },
+  gpu_ram: { gte: 24 },
+  num_gpus: { eq: 1 },
 };
 
 function rows(value: unknown): Record<string, unknown>[] {
@@ -46,8 +55,31 @@ export async function listWorkergroups(): Promise<WorkergroupSummary[]> {
       templateId: typeof row.template_id === "number" ? row.template_id : null,
       templateHash: typeof row.template_hash === "string" ? row.template_hash : null,
       gpuRam: typeof row.gpu_ram === "number" ? row.gpu_ram : null,
+      searchQuery: row.search_query ?? row.search_params ?? null,
     }];
   });
+}
+
+function hasSingleGpuFilter(value: unknown): boolean {
+  if (typeof value === "string") return /(?:^|\s)num_gpus\s*(?:=|==)\s*1(?:\s|$)/.test(value);
+  if (!value || typeof value !== "object") return false;
+  const numGpus = (value as Record<string, unknown>).num_gpus;
+  if (numGpus === 1) return true;
+  return Boolean(numGpus && typeof numGpus === "object" && (numGpus as Record<string, unknown>).eq === 1);
+}
+
+async function ensureSingleGpuWorkergroup(group: WorkergroupSummary, template: { id: number; hash_id: string }) {
+  if (hasSingleGpuFilter(group.searchQuery)) return group;
+  await vastClient.putOnce(`/workergroups/${group.id}/`, {
+    template_hash: template.hash_id,
+    template_id: template.id,
+    endpoint_id: group.endpointId,
+    endpoint_name: group.endpointName,
+    search_params: SINGLE_GPU_SEARCH,
+    gpu_ram: 24,
+    test_workers: 1,
+  });
+  return { ...group, searchQuery: SINGLE_GPU_SEARCH };
 }
 
 function endpointNameFor(templateName: string, hash: string): string {
@@ -72,8 +104,10 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
     existingGroup = undefined;
   }
   if (existingGroup) {
-    const endpoint = endpoints.find((item) => item.id === existingGroup.endpointId || item.endpointName === existingGroup.endpointName);
+    const currentGroup = existingGroup;
+    const endpoint = endpoints.find((item) => item.id === currentGroup.endpointId || item.endpointName === currentGroup.endpointName);
     if (!endpoint) throw new Error("A workergroup exists for this template, but its endpoint could not be found.");
+    existingGroup = await ensureSingleGpuWorkergroup(currentGroup, template as { id: number; hash_id: string });
     return { created: false, template: template.name, templateHash: template.hash_id, endpoint, workergroup: existingGroup };
   }
 
@@ -102,12 +136,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
       endpoint_name: endpoint.endpointName,
       template_hash: template.hash_id,
       template_id: template.id,
-      search_params: {
-        verified: { eq: true },
-        rentable: { eq: true },
-        rented: { eq: false },
-        gpu_ram: { gte: 24 },
-      },
+      search_params: SINGLE_GPU_SEARCH,
       min_load: 0,
       target_util: 0.9,
       cold_mult: 1,
@@ -124,7 +153,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
       template: template.name,
       templateHash: template.hash_id,
       endpoint,
-      workergroup: { id, endpointId: endpoint.id, endpointName: endpoint.endpointName, templateId: template.id, templateHash: template.hash_id, gpuRam: 24 },
+      workergroup: { id, endpointId: endpoint.id, endpointName: endpoint.endpointName, templateId: template.id, templateHash: template.hash_id, gpuRam: 24, searchQuery: SINGLE_GPU_SEARCH },
     };
   } catch (error) {
     if (createdEndpoint) {

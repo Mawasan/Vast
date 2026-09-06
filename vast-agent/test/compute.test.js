@@ -113,6 +113,22 @@ test('prepares one scale-to-zero endpoint and workergroup for a template', async
   assert.equal(writes[0].cold_workers,0);
   assert.equal(writes[0].max_workers,1);
   assert.equal(writes[1].template_hash,'hash-akira');
+  assert.equal(writes[1].search_params.num_gpus.eq,1);
+});
+test('repairs an existing workergroup that can recruit multi-GPU offers', async t => {
+  let updated;
+  t.mock.method(globalThis,'fetch',async (url,opts={})=>{
+    const path=new URL(url).pathname;
+    if(path.endsWith('/users/current/')) return json({id:42});
+    if(path.endsWith('/template/')) return json({templates:[{id:77,hash_id:'hash-akira',name:'AKIRA - Test',creator_id:42,image:'vastai/comfy'}]});
+    if(path.endsWith('/endptjobs')) return json({results:[{id:501,endpoint_name:'akira-test',endpoint_state:'active'}]});
+    if(path.endsWith('/workergroups/') && opts.method==='GET') return json({results:[{id:601,endpoint_id:501,endpoint_name:'akira-test',template_id:77,template_hash:'hash-akira',search_query:'verified=true gpu_ram>=24'}]});
+    if(path.endsWith('/workergroups/601/') && opts.method==='PUT') { updated=JSON.parse(opts.body); return json({success:true}); }
+    throw new Error(`unexpected path ${path} ${opts.method}`);
+  });
+  const result=await prepareTemplateEndpoint('hash-akira');
+  assert.equal(result.created,false);
+  assert.equal(updated.search_params.num_gpus.eq,1);
 });
 test('repairs an Anima template and reprovisions its workergroup before reuse', async t => {
   const baseResource={name:'Anima',role:'base',source:'url',ref:'https://example.com/anima',filename:'anima.safetensors',targetPath:'/workspace/ComfyUI/models/diffusion_models'};
