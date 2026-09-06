@@ -7,10 +7,12 @@ import { config, redact } from "../core/config.js";
 import { logger } from "../core/logger.js";
 import { isConfigured } from "../core/vastClient.js";
 import { requireAgentAuth } from "./auth.js";
+import { registerOAuthRoutes, requestOrigin } from "./oauth.js";
 
 export function createHttpApp() {
   const app = express();
   app.use(express.json({ limit: "5mb" }));
+  app.use(express.urlencoded({ extended: false, limit: "64kb" }));
 
   // Railway / load-balancer health check. Never touches the Vast.ai API.
   app.get("/health", (_req, res) => {
@@ -21,13 +23,13 @@ export function createHttpApp() {
     });
   });
 
+  registerOAuthRoutes(app);
+
   // Public, read-only discovery document for ChatGPT Actions and other
   // OpenAPI clients. It contains schemas and descriptions, never credentials
   // or Vast account data. Tool execution remains protected below.
   app.get(["/openapi.json", "/api/openapi.json"], (req, res) => {
-    const forwardedProto = req.header("x-forwarded-proto")?.split(",")[0]?.trim();
-    const protocol = forwardedProto || req.protocol;
-    const serverUrl = `${protocol}://${req.get("host")}`;
+    const serverUrl = requestOrigin(req);
     res.json({
       openapi: "3.1.0",
       info: {

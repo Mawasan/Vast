@@ -261,6 +261,15 @@ cloud clients can import it automatically. Every tool execution still requires
 `Authorization: Bearer <VAST_AGENT_ACCESS_TOKEN>`. Provider keys stay on the
 agent server; an LLM requires a tool-capable client/host to execute these calls.
 
+### ChatGPT and other cloud MCP hosts
+
+The hosted `/mcp` endpoint implements OAuth 2.1 authorization-code flow with
+PKCE and dynamic client registration. Provider credentials never leave the
+server. During the first connection, the owner authorizes access by entering
+`VAST_AGENT_ACCESS_TOKEN` on the agent's own HTTPS page; the cloud client gets
+a scoped OAuth token instead of that secret. OAuth discovery is published at
+the standard protected-resource and authorization-server metadata URLs.
+
 | Tool | Purpose |
 | --- | --- |
 | `vast_search_offers` | Current on-demand offers, GPU filters, price and disk sizing |

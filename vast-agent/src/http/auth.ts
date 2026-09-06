@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { config } from "../core/config.js";
+import { resourceMetadataUrl, verifyOAuthAccessToken } from "./oauth.js";
 
 function sameSecret(actual: string, expected: string): boolean {
   const actualBytes = Buffer.from(actual);
@@ -20,8 +21,13 @@ export function requireAgentAuth(req: Request, res: Response, next: NextFunction
     res.status(503).json({ error: "agent_access_token_not_configured" });
     return;
   }
-  if (!hasValidAgentToken(req.header("authorization"))) {
-    res.setHeader("WWW-Authenticate", "Bearer");
+  const authorization = req.header("authorization");
+  const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7) : "";
+  if (!hasValidAgentToken(authorization) && !verifyOAuthAccessToken(bearer)) {
+    res.setHeader(
+      "WWW-Authenticate",
+      `Bearer resource_metadata="${resourceMetadataUrl(req)}", scope="vast:read vast:write"`
+    );
     res.status(401).json({ error: "unauthorized" });
     return;
   }

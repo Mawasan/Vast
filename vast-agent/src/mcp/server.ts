@@ -9,17 +9,27 @@ import { redact } from "../core/config.js";
  * Streamable HTTP transport.
  */
 export function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "vast-agent", version: "0.2.0" });
+  const server = new McpServer({ name: "vast-agent", version: "0.3.0" });
 
   for (const tool of tools) {
+    const readOnly = /(^|_)(list|get|search|check|inspect|validate|whoami|memory)(_|$)/.test(tool.name);
+    const idempotent = readOnly || /(^|_)(set|sync|start|stop|generate_image|serverless_request)(_|$)/.test(tool.name);
+    const openWorld = !tool.name.startsWith("comfyui_") && tool.name !== "vast_validate_template_config";
     server.registerTool(
       tool.name,
       {
+        title: tool.name
+          .split("_")
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(" "),
         description: tool.description,
         inputSchema: tool.inputShape,
-        annotations: tool.destructive
-          ? { destructiveHint: true, idempotentHint: false }
-          : { readOnlyHint: tool.name.startsWith("vast_list") || tool.name.startsWith("vast_get") },
+        annotations: {
+          readOnlyHint: readOnly,
+          destructiveHint: Boolean(tool.destructive),
+          idempotentHint: idempotent,
+          openWorldHint: openWorld,
+        },
       },
       async (args: Record<string, unknown>) => {
         try {
