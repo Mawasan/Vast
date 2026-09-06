@@ -217,7 +217,7 @@ export const tools: ToolDef[] = [
   def({
     name: "vast_set_template_start_command",
     description:
-      "Replace the custom part of a template's onstart script. Any managed model/LoRA download commands are preserved and re-appended automatically.",
+      "Replace the custom part of a template's onstart script. Any managed model/LoRA download commands are preserved and placed before the custom command automatically.",
     inputShape: { template: templateRef, script: z.string() },
     handler: async ({ template, script }) => templateEdit.setCustomStartCommand(template, script),
   }),
