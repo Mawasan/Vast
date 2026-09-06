@@ -44,7 +44,7 @@ function buildUrl(path: string, query?: Record<string, unknown>): string {
 async function request(
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
-  opts: { query?: Record<string, unknown>; json?: unknown } = {}
+  opts: { query?: Record<string, unknown>; json?: unknown; once?: boolean } = {}
 ): Promise<unknown> {
   if (!config.vastApiKey) {
     throw new Error(
@@ -59,7 +59,7 @@ async function request(
   const hasBody = method === "POST" || method === "PUT" || method === "DELETE";
   if (hasBody) headers["Content-Type"] = "application/json";
 
-  const maxAttempts = 3;
+  const maxAttempts = opts.once ? 1 : 3;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let res: Response;
@@ -68,6 +68,8 @@ async function request(
         method,
         headers,
         body: hasBody ? JSON.stringify(opts.json ?? {}) : undefined,
+        signal: AbortSignal.timeout(30000),
+        redirect: "error",
       });
     } catch (err) {
       lastErr = err;
@@ -106,6 +108,7 @@ function sleep(ms: number) {
 }
 
 export const vastClient = {
+  putOnce: (path: string, json: unknown) => request("PUT", path, { json, once: true }),
   get: (path: string, query?: Record<string, unknown>) => request("GET", path, { query }),
   post: (path: string, json?: unknown, query?: Record<string, unknown>) =>
     request("POST", path, { json, query }),

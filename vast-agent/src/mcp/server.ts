@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { tools } from "../tools/registry.js";
 import { logger } from "../core/logger.js";
+import { redact } from "../core/config.js";
 
 /**
  * Builds a fresh MCP server with every VAST Agent tool registered. Called
@@ -8,7 +9,7 @@ import { logger } from "../core/logger.js";
  * Streamable HTTP transport.
  */
 export function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "vast-agent", version: "0.1.0" });
+  const server = new McpServer({ name: "vast-agent", version: "0.2.0" });
 
   for (const tool of tools) {
     server.registerTool(
@@ -24,13 +25,13 @@ export function createMcpServer(): McpServer {
         try {
           const result = await tool.handler(args as never);
           return {
-            content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+            content: [{ type: "text" as const, text: redact(JSON.stringify(result, null, 2)) }],
           };
         } catch (err) {
           logger.error(`tool ${tool.name} failed`, { error: (err as Error).message });
           return {
             isError: true,
-            content: [{ type: "text" as const, text: (err as Error).message }],
+            content: [{ type: "text" as const, text: redact((err as Error).message) }],
           };
         }
       }

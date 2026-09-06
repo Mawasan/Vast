@@ -8,6 +8,7 @@ import * as comfy from "../comfyui/workflow.js";
 import type { Workflow } from "../comfyui/workflow.js";
 import { confirmationRequired, needsConfirmation } from "../core/confirm.js";
 import { store } from "../core/store.js";
+import { computeTools } from "./compute.js";
 
 export interface ToolDef<Shape extends z.ZodRawShape = z.ZodRawShape> {
   name: string;
@@ -53,6 +54,7 @@ function def<Shape extends z.ZodRawShape>(t: ToolDef<Shape>): ToolDef {
 }
 
 export const tools: ToolDef[] = [
+  ...computeTools,
   // ---- Templates ----------------------------------------------------------
   def({
     name: "vast_list_templates",

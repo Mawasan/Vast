@@ -246,6 +246,84 @@ only the requested change on top of it, and write the full merged record back.
 ## What this is explicitly not
 
 No chat memory, no AKIRA/Sayuri integration, no multi-agent routing, no
-OpenAI/Anthropic provider code, no image generation or training, and no other
+OpenAI/Anthropic provider code, no training, and no other
 GPU cloud provider (AWS/RunPod/etc). This service only ever talks to
 Vast.ai, Hugging Face, and Civitai.
+
+## General compute and inference tools
+
+Available through the existing `/mcp` endpoint (Claude Code, Cursor, Codex,
+and other MCP clients), stdio, and authenticated REST. No AKIRA dependency.
+REST clients can discover full JSON input schemas at `GET /api/tools` and
+an OpenAPI 3.1 document at `GET /api/openapi.json`. All use
+`Authorization: Bearer <VAST_AGENT_ACCESS_TOKEN>`. Provider keys stay on the
+agent server; an LLM requires a tool-capable client/host to execute these calls.
+
+| Tool | Purpose |
+| --- | --- |
+| `vast_search_offers` | Current on-demand offers, GPU filters, price and disk sizing |
+| `vast_rent_instance` | Rent a specific offer with an existing template and a quoted hourly price ceiling |
+| `vast_start_instance` / `vast_stop_instance` | Resume or stop compute; stopping preserves disk and storage charges |
+| `vast_list_endpoints` | Discover existing serverless endpoint names without exposing credentials |
+| `vast_generate_image` | Submit an API-format ComfyUI workflow to `/generate/sync` |
+| `vast_serverless_request` | Native JSON payloads for text/image/audio/video routes supported by the chosen worker |
+| `vast_get_job` | Retrieve the result after reconnecting |
+
+Examples of natural-language requests: “Find one RTX 4090 under $0.50/hour”,
+“Rent offer 123 using my Illustrious template with 60 GB disk, up to $0.50/hour”,
+“Stop instance 456”, or “Run this image workflow on my ComfyUI endpoint”.
+The client supplies `confirm:true` for authorized mutations/inference. It can
+reuse authorization already given by the user; a missing flag returns a preview.
+
+Rent and inference return immediately with `requestId` and `status:running`.
+Poll `vast_get_job` every few seconds until `completed` or `unknown`. Retrying
+with the same ID and arguments returns the same job; a changed payload under
+that ID is rejected. Jobs and results live under `$VAST_AGENT_DATA_DIR/jobs`
+(Railway: `/data/jobs`). Run a **single replica** against this volume. Client
+disconnects do not stop jobs. Agent restarts cannot resume a lost worker response:
+an interrupted operation becomes `unknown` and is never automatically replayed.
+Inspect Vast before issuing a new ID in that case. No automatic GPU cleanup is
+performed; the client must stop/destroy the rented instance when appropriate.
+
+The rental ceiling is checked against the current `dph_total` quote immediately
+before renting; it is not a hard lifetime spending cap or an atomic provider-side
+price guarantee. Network traffic may cost extra. `cost` in inference is a Vast
+workload estimate, **not dollars**. Inference can start autoscaled workers.
+
+Generation requires an existing, configured Serverless endpoint/workergroup;
+renting an ordinary instance does not enroll it into Serverless. Routing waits
+up to `timeoutSeconds` (10–1800 seconds) for a worker. Worker addresses must be
+public IPv4 literals; redirects and private network destinations are rejected.
+The worker payload uses `{auth_data, payload}`. The Vast API key is sent only to
+Vast's router, not to the worker. Paid POST/PUT requests are never automatically
+retried after uncertain failures.
+
+For ComfyUI, supply API-format nodes (`class_type` and `inputs` keyed by node ID),
+not the editor's `nodes`/`links` export used by the workflow editing tools.
+The checkpoint/LoRA files and custom nodes must exist on the worker. Media output
+is returned as the worker provides it: configure S3 on the worker for persistent
+download URLs. A `local_path` alone is explicitly identified as a worker-local
+file, not a downloadable image. Binary responses return MIME type and base64;
+outputs larger than 32 MB must use worker storage URLs. Requests use JSON and
+non-streaming responses; multipart uploads and SSE inference are not implemented.
+
+REST example (same argument shape as MCP):
+
+```js
+const base = "https://vast-agent-production.up.railway.app";
+const headers = {
+  "Authorization": `Bearer ${process.env.VAST_AGENT_ACCESS_TOKEN}`,
+  "Content-Type": "application/json"
+};
+const response = await fetch(`${base}/api/tools/vast_search_offers`, {
+  method: "POST", headers,
+  body: JSON.stringify({ filters: { gpu_name: { eq: "RTX_4090" } }, limit: 5, diskGb: 60 })
+});
+console.log(await response.json());
+```
+
+Protocol references: [offer search](https://docs.vast.ai/api-reference/search/search-offers),
+[rental](https://docs.vast.ai/api-reference/instances/create-instance),
+[start/stop](https://docs.vast.ai/api-reference/instances/manage-instance),
+[routing](https://docs.vast.ai/api-reference/serverless/route),
+[ComfyUI payload](https://docs.vast.ai/guides/serverless/comfyui-wan-2.2).

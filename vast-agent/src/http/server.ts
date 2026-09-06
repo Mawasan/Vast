@@ -3,7 +3,7 @@ import { z } from "zod";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpServer } from "../mcp/server.js";
 import { tools } from "../tools/registry.js";
-import { config } from "../core/config.js";
+import { config, redact } from "../core/config.js";
 import { logger } from "../core/logger.js";
 import { isConfigured } from "../core/vastClient.js";
 import { requireAgentAuth } from "./auth.js";
@@ -24,6 +24,20 @@ export function createHttpApp() {
   // Everything that can inspect or change the Vast account is protected.
   // Only the load-balancer health endpoint remains public.
   app.use(["/mcp", "/api"], requireAgentAuth);
+
+  // Machine-readable REST contract for clients without native MCP support.
+  app.get("/api/openapi.json", (_req, res) => {
+    res.json({ openapi: "3.1.0", info: { title: "Vast Agent", version: "0.2.0" },
+      security: [{ bearerAuth: [] }],
+      components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } } },
+      paths: Object.fromEntries(tools.map(tool => [`/api/tools/${tool.name}`, { post: {
+        operationId: tool.name, description: tool.description,
+        requestBody: { required: true, content: { "application/json": { schema: z.toJSONSchema(z.object(tool.inputShape)) } } },
+        responses: { "200": { description: "Tool result, operation preview, or asynchronous job", content: { "application/json": { schema: { type: "object", properties: { result: {} } } } } },
+          "400": { description: "Invalid input or tool failure" }, "401": { description: "Invalid access token" } },
+      } }])),
+    });
+  });
 
   // MCP endpoint: stateless Streamable HTTP, one fresh server+transport per
   // request. Cursor / Codex / Claude Code and any MCP-compatible client
@@ -53,6 +67,7 @@ export function createHttpApp() {
         name: t.name,
         description: t.description,
         destructive: Boolean(t.destructive),
+        inputSchema: z.toJSONSchema(z.object(t.inputShape)),
         inputShape: Object.fromEntries(
           Object.entries(t.inputShape).map(([k, v]) => [k, (v as z.ZodTypeAny).description ?? v.constructor.name])
         ),
@@ -69,9 +84,9 @@ export function createHttpApp() {
     try {
       const parsed = z.object(tool.inputShape).parse(req.body ?? {});
       const result = await tool.handler(parsed as never);
-      res.json({ result });
+      res.json(JSON.parse(redact(JSON.stringify({ result }))));
     } catch (err) {
-      const message = err instanceof z.ZodError ? err.issues : (err as Error).message;
+      const message = err instanceof z.ZodError ? err.issues : redact((err as Error).message);
       logger.error(`tool ${tool.name} failed via http`, { error: message });
       res.status(400).json({ error: "tool_failed", message });
     }
