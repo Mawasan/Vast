@@ -125,6 +125,20 @@ test('image request routes auth_data separately and preserves complete workflow'
   await call('vast_generate_image',{requestId:'image-ok',endpoint:'test',confirm:true,workflow:{'1':{class_type:'SaveImage',inputs:{}}}});
   const job=await finish('image-ok'); assert.equal(job.status,'completed',job.error); assert.equal(sends,1); assert.equal(job.result.output.output[0].url,'https://storage.example/image.png');
 });
+test('image request retrieves ComfyUI local_path output before the worker scales down', async t => {
+  const imageBytes=Buffer.alloc(32,7);
+  let generated=false, viewed=false;
+  t.mock.method(globalThis,'fetch',async (url,opts={})=>{
+    const value=String(url);
+    if(value.includes('run.vast.ai')) return json({url:'http://8.8.4.4:8000',signature:'signed',reqnum:8});
+    if(value==='http://8.8.4.4:8000/generate/sync') { generated=true; return json({output:[{local_path:'/workspace/ComfyUI/output/akira/test.png'}]}); }
+    if(value==='http://8.8.4.4:8000/view?filename=test.png&type=output&subfolder=akira') { viewed=true; return new Response(imageBytes,{headers:{'content-type':'image/png'}}); }
+    throw new Error(`unexpected URL ${value}`);
+  });
+  const result=await runInference({endpoint:'test',path:'/generate/sync',payload:{stream:false},cost:100,timeoutSeconds:10});
+  assert.equal(generated,true); assert.equal(viewed,true);
+  assert.equal(result.media.mimeType,'image/png'); assert.equal(result.media.base64,imageBytes.toString('base64'));
+});
 test('private worker destinations rejected; failed worker is not retried', async t => {
   for(const url of ['http://127.0.0.1:80','http://169.254.169.254','http://10.0.0.1','http://[::1]','http://localhost','http://user:password@8.8.8.8']) await assert.rejects(()=>workerUrl(url));
   let sends=0;

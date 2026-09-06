@@ -1,5 +1,11 @@
 import { isIP } from "node:net";
+import { rootCertificates } from "node:tls";
+import { Agent } from "undici";
 import { config } from "../core/config.js";
+
+const VAST_ROOT_CA_URL = "https://console.vast.ai/static/jvastai_root.cer";
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+let vastWorkerAgentPromise: Promise<Agent> | undefined;
 
 export function isPublicIpv4(ip: string): boolean {
   if (isIP(ip) !== 4) return false;
@@ -14,6 +20,77 @@ export async function workerUrl(raw: string): Promise<URL> {
   // Vast routes use public worker IPs. Restricting to literals avoids DNS rebinding.
   if (!isPublicIpv4(url.hostname)) throw new Error("Vast worker must have a public IPv4 address.");
   return url;
+}
+
+async function vastWorkerAgent(): Promise<Agent> {
+  vastWorkerAgentPromise ??= (async () => {
+    const response = await fetch(VAST_ROOT_CA_URL);
+    if (!response.ok) throw new Error(`Vast worker certificate request failed (${response.status}).`);
+    const certificate = (await response.text()).trim();
+    if (!certificate.startsWith("-----BEGIN CERTIFICATE-----") || !certificate.endsWith("-----END CERTIFICATE-----")) {
+      throw new Error("Vast worker certificate response was invalid.");
+    }
+    return new Agent({ connect: { ca: [...rootCertificates, certificate] } });
+  })().catch(error => {
+    vastWorkerAgentPromise = undefined;
+    throw error;
+  });
+  return vastWorkerAgentPromise;
+}
+
+async function workerFetch(url: URL, init: RequestInit): Promise<Response> {
+  if (url.protocol !== "https:") return fetch(url, init);
+  const dispatcher = await vastWorkerAgent();
+  return fetch(url, { ...init, dispatcher } as RequestInit & { dispatcher: Agent });
+}
+
+function outputAssets(body: Record<string, unknown>): Record<string, unknown>[] {
+  const response = body.response && typeof body.response === "object" ? body.response as Record<string, unknown> : undefined;
+  const payload = response ?? body;
+  const candidates = [payload.output, body.output];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate.filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === "object");
+  }
+  return [];
+}
+
+function viewLocation(asset: Record<string, unknown>): { filename: string; subfolder?: string; type: string } | null {
+  const explicitFilename = typeof asset.filename === "string" ? asset.filename.trim() : "";
+  const explicitSubfolder = typeof asset.subfolder === "string" ? asset.subfolder.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "") : "";
+  if (explicitFilename) {
+    if (explicitFilename.includes("..") || /[\\/]/.test(explicitFilename) || explicitSubfolder.includes("..")) return null;
+    return { filename: explicitFilename, subfolder: explicitSubfolder || undefined, type: typeof asset.type === "string" ? asset.type : "output" };
+  }
+  if (typeof asset.local_path !== "string") return null;
+  const normalized = asset.local_path.trim().replace(/\\/g, "/");
+  const marker = "/output/";
+  const relative = normalized.includes(marker) ? normalized.slice(normalized.lastIndexOf(marker) + marker.length) : normalized.split("/").pop() ?? "";
+  const parts = relative.split("/").filter(Boolean);
+  if (parts.length === 0 || parts.some(part => part === "." || part === "..")) return null;
+  const filename = parts.pop()!;
+  if (!filename || /[\\/]/.test(filename)) return null;
+  return { filename, subfolder: parts.length ? parts.join("/") : undefined, type: "output" };
+}
+
+async function fetchWorkerImage(worker: URL, body: Record<string, unknown>, signal: AbortSignal): Promise<{ mimeType: string; base64: string } | undefined> {
+  const asset = outputAssets(body).find(value => {
+    const hasInline = ["data", "b64_json"].some(key => typeof value[key] === "string" && String(value[key]).trim());
+    const hasPublicUrl = ["url", "image_url"].some(key => typeof value[key] === "string" && /^https:\/\//i.test(String(value[key])));
+    return !hasInline && !hasPublicUrl && viewLocation(value) !== null;
+  });
+  if (!asset) return undefined;
+  const location = viewLocation(asset)!;
+  const view = new URL("/view", worker);
+  view.searchParams.set("filename", location.filename);
+  view.searchParams.set("type", location.type);
+  if (location.subfolder) view.searchParams.set("subfolder", location.subfolder);
+  const response = await workerFetch(view, { signal, redirect: "error" });
+  if (!response.ok) throw new Error(`Worker generated an image, but /view could not retrieve it (${response.status}).`);
+  const mimeType = (response.headers.get("content-type") ?? "image/png").split(";")[0];
+  if (!mimeType.startsWith("image/")) throw new Error("Worker /view did not return an image.");
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length < 24 || bytes.length > MAX_RESPONSE_BYTES) throw new Error("Worker /view returned an invalid or oversized image.");
+  return { mimeType, base64: bytes.toString("base64") };
 }
 export async function runInference(input: { endpoint: string; path: string; payload: Record<string, unknown>; cost: number; timeoutSeconds: number }) {
   if (!config.vastApiKey) throw new Error("VAST_API_KEY is not configured.");
@@ -36,7 +113,7 @@ export async function runInference(input: { endpoint: string; path: string; payl
   const base = await workerUrl(String(assignment.url));
   if (!assignment.signature || assignment.reqnum === undefined) throw new Error("Incomplete worker authentication from Vast.");
   const url = new URL(input.path, base);
-  const response = await fetch(url, {
+  const response = await workerFetch(url, {
     method: "POST", headers: { "Content-Type": "application/json" }, redirect: "error",
     body: JSON.stringify({ auth_data: assignment, payload: input.payload }),
     signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
@@ -48,7 +125,7 @@ export async function runInference(input: { endpoint: string; path: string; payl
   if (!response.body) throw new Error("Worker returned an empty response.");
   for await (const chunk of response.body) {
     size += chunk.byteLength;
-    if (size > 32 * 1024 * 1024) throw new Error("Worker output exceeds 32 MB. Use worker S3 URLs for larger media.");
+    if (size > MAX_RESPONSE_BYTES) throw new Error("Worker output exceeds 32 MB. Use worker S3 URLs for larger media.");
     chunks.push(chunk);
   }
   const bytes = Buffer.concat(chunks);
@@ -60,6 +137,7 @@ export async function runInference(input: { endpoint: string; path: string; payl
   const result = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
   const nested = result.response as Record<string, unknown> | undefined;
   if (result.error || result.success === false || result.status === "failed" || nested?.error || nested?.success === false) throw new Error("Worker reported generation failure. Check worker logs and workflow/model compatibility.");
-  return { endpoint: input.endpoint, output: result,
-    note: "Output schema belongs to the worker. A local_path is a file on the GPU, not a downloadable URL. Configure worker S3 output for persistent media URLs." };
+  const media = await fetchWorkerImage(base, result, AbortSignal.timeout(Math.max(1, deadline - Date.now())));
+  return { endpoint: input.endpoint, output: result, ...(media ? { media } : {}),
+    note: media ? "Image bytes were retrieved from the assigned worker before it scaled down." : "Output schema belongs to the worker. Configure worker S3 output for persistent media URLs when media is not returned inline." };
 }
