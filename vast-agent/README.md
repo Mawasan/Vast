@@ -154,6 +154,10 @@ Template editing: `vast_list_template_models`, `vast_set_template_base_model`,
 
 Instances: `vast_list_instances`, `vast_get_instance`, `vast_destroy_instance`.
 
+Serverless inference: `vast_generate_image`, `vast_generate_anima_image`,
+`vast_get_job`. The Anima tool builds the required UNET/text-encoder/VAE graph
+and applies every LoRA attached to the selected template in order.
+
 Model search: `huggingface_search_models`, `huggingface_get_model_info`,
 `civitai_search_models`, `civitai_get_model_info`, `civitai_get_model_version`.
 
@@ -185,6 +189,11 @@ matching slot types, every node still reachable from `SaveImage` — and a patch
 that would produce a broken graph raises instead of returning it. The
 workflow tools take and return JSON; they never touch a running instance's
 filesystem, so the caller decides where the result is written.
+
+Anima templates are handled separately because their base model belongs in
+`models/diffusion_models` and their LoRAs are model-only. Use
+`vast_generate_anima_image`; it creates the API workflow automatically from
+the template's attached base model and ordered LoRA list.
 
 ## Tests
 
