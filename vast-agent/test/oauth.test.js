@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 process.env.VAST_API_KEY = 'private-test-vast-key';
 process.env.VAST_AGENT_ACCESS_TOKEN = 'private-test-agent-token';
@@ -78,6 +80,15 @@ test('OAuth discovery, DCR, PKCE, refresh, and protected REST access work end to
 
     const protectedCall = await fetch(`${base}/api/tools`, { headers: { authorization: `Bearer ${tokens.access_token}` } });
     assert.equal(protectedCall.status, 200);
+
+    const mcpClient = new Client({ name: 'oauth-integration-test', version: '1.0.0' });
+    await mcpClient.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } },
+    }));
+    const mcpTools = await mcpClient.listTools();
+    assert.equal(mcpTools.tools.length, 38);
+    assert.equal(mcpTools.tools.find(tool => tool.name === 'vast_destroy_instance').annotations.destructiveHint, true);
+    await mcpClient.close();
 
     const replay = await fetch(`${base}/oauth/token`, {
       method: 'POST',
