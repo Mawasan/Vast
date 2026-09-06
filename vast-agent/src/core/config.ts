@@ -76,6 +76,7 @@ function envBool(name: string, fallback: boolean): boolean {
 
 export const config = {
   vastApiKey: env("VAST_API_KEY"),
+  accessToken: env("VAST_AGENT_ACCESS_TOKEN"),
   vastUrl: env("VAST_URL", "https://console.vast.ai") as string,
   hfToken: env("HF_TOKEN"),
   civitaiToken: env("CIVITAI_API_TOKEN"),
@@ -87,7 +88,7 @@ export const config = {
 
 /** Secret values that must never appear in logs or tool output. */
 export function secretValues(): string[] {
-  return [config.vastApiKey, config.hfToken, config.civitaiToken].filter(
+  return [config.vastApiKey, config.accessToken, config.hfToken, config.civitaiToken].filter(
     (v): v is string => Boolean(v && v.length >= 6)
   );
 }

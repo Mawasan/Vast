@@ -45,6 +45,7 @@ Required/optional environment variables (see `.env.example`):
 | Variable | Required | Purpose |
 |---|---|---|
 | `VAST_API_KEY` | yes | Vast.ai console API key |
+| `VAST_AGENT_ACCESS_TOKEN` | yes for HTTP | protects the public MCP and REST endpoints |
 | `HF_TOKEN` | no | gated/private Hugging Face repos |
 | `CIVITAI_API_TOKEN` | no | NSFW-gated Civitai content / rate limits |
 | `VAST_URL` | no | override API base (default `https://console.vast.ai`) |
@@ -69,7 +70,7 @@ is configured, so Railway's health check works even if Vast.ai is down.
 ## Deploying to Railway
 
 Push this directory as its own Railway service (`Dockerfile` + `railway.json`
-are included). Set `VAST_API_KEY` (and optionally `HF_TOKEN` /
+are included). Set `VAST_API_KEY`, `VAST_AGENT_ACCESS_TOKEN` and optionally `HF_TOKEN` /
 `CIVITAI_API_TOKEN`) as service variables. Railway provides `PORT`
 automatically; the container listens on it and answers `/health`.
 
@@ -94,7 +95,10 @@ automatically; the container listens on it and answers `/health`.
 ```json
 {
   "mcpServers": {
-    "vast-agent": { "url": "https://<your-railway-app>.up.railway.app/mcp" }
+    "vast-agent": {
+      "url": "https://<your-railway-app>.up.railway.app/mcp",
+      "headers": { "Authorization": "Bearer ${VAST_AGENT_ACCESS_TOKEN}" }
+    }
   }
 }
 ```

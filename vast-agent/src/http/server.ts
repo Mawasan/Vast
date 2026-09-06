@@ -6,6 +6,7 @@ import { tools } from "../tools/registry.js";
 import { config } from "../core/config.js";
 import { logger } from "../core/logger.js";
 import { isConfigured } from "../core/vastClient.js";
+import { requireAgentAuth } from "./auth.js";
 
 export function createHttpApp() {
   const app = express();
@@ -19,6 +20,10 @@ export function createHttpApp() {
       transport: config.transport,
     });
   });
+
+  // Everything that can inspect or change the Vast account is protected.
+  // Only the load-balancer health endpoint remains public.
+  app.use(["/mcp", "/api"], requireAgentAuth);
 
   // MCP endpoint: stateless Streamable HTTP, one fresh server+transport per
   // request. Cursor / Codex / Claude Code and any MCP-compatible client
