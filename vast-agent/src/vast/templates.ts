@@ -66,16 +66,31 @@ export function normalizeTemplateExtraFilters(value: unknown): Record<string, un
 }
 
 function normalizeTemplate(t: VastTemplate): VastTemplate {
-  return { ...t, extra_filters: normalizeTemplateExtraFilters(t.extra_filters) };
+  try {
+    return { ...t, extra_filters: normalizeTemplateExtraFilters(t.extra_filters) };
+  } catch {
+    // Keep malformed legacy data readable so a caller can repair it through an
+    // explicit extra_filters patch. Other edits still reject it below.
+    return t;
+  }
 }
 
-function pickWriteFields(t: Partial<VastTemplate>): VastTemplateFields {
+function pickWriteFields(
+  t: Partial<VastTemplate>,
+  { replacingMalformedExtraFilters = false }: { replacingMalformedExtraFilters?: boolean } = {}
+): VastTemplateFields {
   const out: VastTemplateFields = {};
   for (const key of TEMPLATE_WRITE_KEYS) {
     if (t[key] !== undefined) {
-      (out as Record<string, unknown>)[key] = key === "extra_filters"
-        ? normalizeTemplateExtraFilters(t[key])
-        : t[key];
+      if (key === "extra_filters") {
+        try {
+          (out as Record<string, unknown>)[key] = normalizeTemplateExtraFilters(t[key]);
+        } catch (error) {
+          if (!replacingMalformedExtraFilters) throw error;
+        }
+      } else {
+        (out as Record<string, unknown>)[key] = t[key];
+      }
     }
   }
   return out;
@@ -237,7 +252,10 @@ export async function updateTemplate(
   const current = await getTemplate({ hashId });
   if (!current) throw new Error(`No template found with hash_id "${hashId}"`);
 
-  const merged: VastTemplateFields = { ...pickWriteFields(current), ...patch };
+  const merged: VastTemplateFields = {
+    ...pickWriteFields(current, { replacingMalformedExtraFilters: patch.extra_filters !== undefined }),
+    ...patch,
+  };
   const validation = validateTemplateFields(merged, { isCreate: false });
   if (!validation.valid) {
     throw new Error(`Invalid template configuration: ${validation.errors.join("; ")}`);

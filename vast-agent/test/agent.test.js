@@ -213,6 +213,17 @@ describe("template GPU filters", () => {
       gpu_ram: { gte: 24000 },
     });
   });
+
+  test("an unparseable legacy value remains readable and can be explicitly repaired", async () => {
+    currentTemplate("hash-animagine").extra_filters = '"broken legacy value';
+    const readable = await call("vast_get_template", { template: "animagine" });
+    assert.equal(readable.name, "Animagine ComfyUI");
+    await call("vast_update_template", {
+      template: "animagine",
+      extraFilters: { gpu_ram: { gte: 24000 } },
+    });
+    assert.deepEqual(currentTemplate("hash-animagine").extra_filters, { gpu_ram: { gte: 24000 } });
+  });
 });
 
 describe("ambiguous or unknown template names", () => {
