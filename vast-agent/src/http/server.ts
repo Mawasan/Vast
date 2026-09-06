@@ -21,23 +21,64 @@ export function createHttpApp() {
     });
   });
 
-  // Everything that can inspect or change the Vast account is protected.
-  // Only the load-balancer health endpoint remains public.
-  app.use(["/mcp", "/api"], requireAgentAuth);
-
-  // Machine-readable REST contract for clients without native MCP support.
-  app.get("/api/openapi.json", (_req, res) => {
-    res.json({ openapi: "3.1.0", info: { title: "Vast Agent", version: "0.2.0" },
+  // Public, read-only discovery document for ChatGPT Actions and other
+  // OpenAPI clients. It contains schemas and descriptions, never credentials
+  // or Vast account data. Tool execution remains protected below.
+  app.get(["/openapi.json", "/api/openapi.json"], (req, res) => {
+    const forwardedProto = req.header("x-forwarded-proto")?.split(",")[0]?.trim();
+    const protocol = forwardedProto || req.protocol;
+    const serverUrl = `${protocol}://${req.get("host")}`;
+    res.json({
+      openapi: "3.1.0",
+      info: {
+        title: "Vast Agent",
+        version: "0.3.0",
+        description:
+          "Manage Vast.ai compute and serverless inference. Read operations may run immediately. " +
+          "Paid or state-changing operations first return confirmation_required unless confirm=true is supplied.",
+      },
+      servers: [{ url: serverUrl }],
       security: [{ bearerAuth: [] }],
-      components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } } },
-      paths: Object.fromEntries(tools.map(tool => [`/api/tools/${tool.name}`, { post: {
-        operationId: tool.name, description: tool.description,
-        requestBody: { required: true, content: { "application/json": { schema: z.toJSONSchema(z.object(tool.inputShape)) } } },
-        responses: { "200": { description: "Tool result, operation preview, or asynchronous job", content: { "application/json": { schema: { type: "object", properties: { result: {} } } } } },
-          "400": { description: "Invalid input or tool failure" }, "401": { description: "Invalid access token" } },
-      } }])),
+      components: {
+        securitySchemes: {
+          bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "VastAgentAccessToken" },
+        },
+      },
+      paths: Object.fromEntries(
+        tools.map((tool) => [
+          `/api/tools/${tool.name}`,
+          {
+            post: {
+              operationId: tool.name,
+              description: tool.description,
+              requestBody: {
+                required: true,
+                content: {
+                  "application/json": { schema: z.toJSONSchema(z.object(tool.inputShape)) },
+                },
+              },
+              responses: {
+                "200": {
+                  description: "Tool result, operation preview, or asynchronous job",
+                  content: {
+                    "application/json": {
+                      schema: { type: "object", properties: { result: {} } },
+                    },
+                  },
+                },
+                "400": { description: "Invalid input or tool failure" },
+                "401": { description: "Invalid access token" },
+              },
+            },
+          },
+        ])
+      ),
     });
   });
+
+  // Everything that can inspect or change the Vast account is protected.
+  // Health and the OpenAPI discovery document are the only public routes.
+  app.use(["/mcp", "/api"], requireAgentAuth);
 
   // MCP endpoint: stateless Streamable HTTP, one fresh server+transport per
   // request. Cursor / Codex / Claude Code and any MCP-compatible client

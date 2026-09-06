@@ -94,7 +94,7 @@ test('private worker destinations rejected; failed worker is not retried', async
   });
   await assert.rejects(()=>runInference({endpoint:'test',path:'/generate/sync',payload:{},cost:100,timeoutSeconds:10}),/500/); assert.equal(sends,1);
 });
-test('REST schemas and MCP expose the same tools, with authorization', async () => {
+test('REST schemas and MCP expose the same tools, with protected execution and public discovery', async () => {
   const server=createHttpApp().listen(0,'127.0.0.1');
   await new Promise(r=>server.once('listening',r));
   const base=`http://127.0.0.1:${server.address().port}`;
@@ -103,8 +103,12 @@ test('REST schemas and MCP expose the same tools, with authorization', async () 
   try {
     assert.equal((await fetch(base+'/api/tools')).status,401);
     const rest=await (await fetch(base+'/api/tools',{headers})).json();
-    const spec=await (await fetch(base+'/api/openapi.json',{headers})).json();
+    const specResponse=await fetch(base+'/api/openapi.json');
+    assert.equal(specResponse.status,200);
+    const spec=await specResponse.json();
     assert.equal(Object.keys(spec.paths).length,rest.length);
+    assert.equal(spec.servers[0].url,base);
+    assert.equal((await fetch(base+'/api/tools/vast_search_offers',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})).status,401);
     const schema=rest.find(t=>t.name==='vast_rent_instance').inputSchema; assert.ok(schema.required.includes('maxHourlyUsd'));
     await client.connect(new StreamableHTTPClientTransport(new URL(base+'/mcp'),{requestInit:{headers}}));
     const mcp=await client.listTools(); assert.equal(mcp.tools.length,rest.length);

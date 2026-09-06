@@ -254,8 +254,10 @@ Vast.ai, Hugging Face, and Civitai.
 
 Available through the existing `/mcp` endpoint (Claude Code, Cursor, Codex,
 and other MCP clients), stdio, and authenticated REST. No AKIRA dependency.
-REST clients can discover full JSON input schemas at `GET /api/tools` and
-an OpenAPI 3.1 document at `GET /api/openapi.json`. All use
+REST clients can discover full JSON input schemas at protected `GET /api/tools`.
+The credential-free OpenAPI 3.1 discovery document is available at
+`GET /openapi.json` and `GET /api/openapi.json` so ChatGPT Actions and other
+cloud clients can import it automatically. Every tool execution still requires
 `Authorization: Bearer <VAST_AGENT_ACCESS_TOKEN>`. Provider keys stay on the
 agent server; an LLM requires a tool-capable client/host to execute these calls.
 
