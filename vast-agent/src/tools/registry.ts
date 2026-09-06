@@ -106,11 +106,12 @@ export const tools: ToolDef[] = [
       onstart: z.string().optional(),
       runtype: z.enum(["args", "ssh", "jupyter"]).default("ssh"),
       use_ssh: z.boolean().optional(),
+      extraFilters: z.record(z.string(), z.unknown()).optional().describe("Vast GPU offer fields directly, e.g. gpu_ram:{gte:24000}; never JSON-encode this object"),
       recommended_disk_space: z.number().optional(),
       desc: z.string().optional(),
       private: z.boolean().default(true),
     },
-    handler: async (fields) => templates.createTemplate(fields),
+    handler: async ({ extraFilters, ...fields }) => templates.createTemplate({ ...fields, ...(extraFilters ? { extra_filters: extraFilters } : {}) }),
   }),
 
   def({
@@ -125,11 +126,15 @@ export const tools: ToolDef[] = [
       env: z.string().optional(),
       onstart: z.string().optional(),
       runtype: z.enum(["args", "ssh", "jupyter"]).optional(),
+      extraFilters: z.record(z.string(), z.unknown()).optional().describe("Vast GPU offer fields directly, e.g. gpu_ram:{gte:24000}; never JSON-encode this object"),
       recommended_disk_space: z.number().optional(),
       desc: z.string().optional(),
     },
-    handler: async ({ template, ...patch }) =>
-      templates.updateTemplate(await templates.resolveTemplateHashId(template), patch),
+    handler: async ({ template, extraFilters, ...patch }) =>
+      templates.updateTemplate(await templates.resolveTemplateHashId(template), {
+        ...patch,
+        ...(extraFilters ? { extra_filters: extraFilters } : {}),
+      }),
   }),
 
   def({

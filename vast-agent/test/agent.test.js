@@ -195,6 +195,26 @@ describe("env vars stay surgical", () => {
   });
 });
 
+describe("template GPU filters", () => {
+  test("legacy repeatedly encoded filters are repaired on the next edit", async () => {
+    const legacy = JSON.stringify(JSON.stringify(JSON.stringify({ gpu_ram: { gte: 24000 } })));
+    currentTemplate("hash-animagine").extra_filters = legacy;
+    await call("vast_update_template", { template: "animagine", desc: "repaired" });
+    assert.deepEqual(currentTemplate("hash-animagine").extra_filters, { gpu_ram: { gte: 24000 } });
+  });
+
+  test("GPU filters can be set as an object without JSON encoding", async () => {
+    await call("vast_update_template", {
+      template: "animagine",
+      extraFilters: { compute_cap: { gte: 800 }, gpu_ram: { gte: 24000 } },
+    });
+    assert.deepEqual(currentTemplate("hash-animagine").extra_filters, {
+      compute_cap: { gte: 800 },
+      gpu_ram: { gte: 24000 },
+    });
+  });
+});
+
 describe("ambiguous or unknown template names", () => {
   test("an ambiguous name lists the candidates instead of guessing", async () => {
     await assert.rejects(

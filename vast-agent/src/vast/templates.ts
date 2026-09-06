@@ -36,10 +36,47 @@ const TEMPLATE_DEFAULTS: VastTemplateFields = {
   private: true,
 };
 
+/**
+ * Vast expects an object, but older edits can leave the field JSON-encoded one
+ * or more times. Decode that legacy shape before it is ever written back.
+ */
+export function normalizeTemplateExtraFilters(value: unknown): Record<string, unknown> {
+  if (value === undefined || value === null || value === "") return {};
+  let current: unknown = value;
+  for (let depth = 0; depth < 8 && typeof current === "string"; depth += 1) {
+    try {
+      current = JSON.parse(current);
+    } catch {
+      throw new Error("Invalid template extra_filters: expected a JSON object, but found an invalid encoded string.");
+    }
+  }
+  if (typeof current === "string") {
+    throw new Error("Invalid template extra_filters: too many layers of JSON encoding.");
+  }
+  if (typeof current !== "object" || current === null || Array.isArray(current)) {
+    throw new Error("Invalid template extra_filters: expected an object.");
+  }
+  let filters = current as Record<string, unknown>;
+  for (let depth = 0; depth < 8 && Object.keys(filters).length === 1 && Object.hasOwn(filters, "filters"); depth += 1) {
+    const nested = filters.filters;
+    if (typeof nested !== "object" || nested === null || Array.isArray(nested)) break;
+    filters = nested as Record<string, unknown>;
+  }
+  return filters;
+}
+
+function normalizeTemplate(t: VastTemplate): VastTemplate {
+  return { ...t, extra_filters: normalizeTemplateExtraFilters(t.extra_filters) };
+}
+
 function pickWriteFields(t: Partial<VastTemplate>): VastTemplateFields {
   const out: VastTemplateFields = {};
   for (const key of TEMPLATE_WRITE_KEYS) {
-    if (t[key] !== undefined) (out as Record<string, unknown>)[key] = t[key];
+    if (t[key] !== undefined) {
+      (out as Record<string, unknown>)[key] = key === "extra_filters"
+        ? normalizeTemplateExtraFilters(t[key])
+        : t[key];
+    }
   }
   return out;
 }
@@ -70,6 +107,13 @@ export function validateTemplateFields(
   if (fields.env !== undefined && typeof fields.env !== "string") {
     errors.push("env must be a Docker-options flag string, e.g. \"-e KEY=value -p 8000:8000\"");
   }
+  if (fields.extra_filters !== undefined) {
+    try {
+      normalizeTemplateExtraFilters(fields.extra_filters);
+    } catch (error) {
+      errors.push((error as Error).message);
+    }
+  }
   return { valid: errors.length === 0, errors };
 }
 
@@ -93,7 +137,7 @@ export async function searchTemplates(filters?: SelectFilters): Promise<VastTemp
     select_cols: ["*"],
     select_filters: filters ?? {},
   })) as { templates?: VastTemplate[] };
-  return res.templates ?? [];
+  return (res.templates ?? []).map(normalizeTemplate);
 }
 
 export async function listMyTemplates(): Promise<VastTemplate[]> {
@@ -161,7 +205,11 @@ export async function createTemplate(fields: VastTemplateFields): Promise<VastTe
   if (!validation.valid) {
     throw new Error(`Invalid template configuration: ${validation.errors.join("; ")}`);
   }
-  const body: VastTemplateFields = { ...TEMPLATE_DEFAULTS, ...fields };
+  const body: VastTemplateFields = {
+    ...TEMPLATE_DEFAULTS,
+    ...fields,
+    extra_filters: normalizeTemplateExtraFilters(fields.extra_filters ?? TEMPLATE_DEFAULTS.extra_filters),
+  };
   const res = (await vastClient.post("/template/", body)) as {
     template?: VastTemplate;
     success?: boolean;
