@@ -26,12 +26,17 @@ function downloadCommand(resource: ModelResource): string {
       );
     case "civitai":
       // -C - resumes a partial download; the token is read from the instance's
-      // environment and never written into the template itself.
-      return (
-        `${mkdir} && curl -fL -C - -H "Authorization: Bearer $CIVITAI_API_TOKEN" ` +
-        `-o "${targetPath}/${filename ?? `${resource.name}.safetensors`}" ` +
-        `"https://civitai.com/api/download/models/${ref}"`
-      );
+      // environment and never written into the template itself. Public files
+      // remain downloadable when no token is configured.
+      {
+        const output = `${targetPath}/${filename ?? `${resource.name}.safetensors`}`;
+        const url = `https://civitai.com/api/download/models/${ref}`;
+        return (
+          `${mkdir} && if [ -n "\${CIVITAI_API_TOKEN:-}" ]; then ` +
+          `curl -fL -C - -H "Authorization: Bearer $CIVITAI_API_TOKEN" -o "${output}" "${url}"; ` +
+          `else curl -fL -C - -o "${output}" "${url}"; fi`
+        );
+      }
     case "url":
     default:
       return `${mkdir} && curl -fL -C - -o "${targetPath}/${filename ?? resource.name}" "${ref}"`;
@@ -66,17 +71,19 @@ export function parseManagedModels(onstart: string | undefined | null): ModelRes
   }
 }
 
-/** Replaces the managed block in `onstart`, leaving everything else untouched. */
+/**
+ * Replaces the managed block in `onstart` and keeps it before the user's
+ * command. A long-running server start must never prevent model downloads.
+ */
 export function injectManagedBlock(onstart: string | undefined | null, resources: ModelResource[]): string {
   const block = buildManagedBlock(resources);
   const source = onstart ?? "";
   const start = source.indexOf(START_MARKER);
   const end = source.indexOf(END_MARKER);
   if (start === -1 || end === -1) {
-    const trimmed = source.trimEnd();
-    return trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
+    const custom = source.trim();
+    return custom ? `${block}\n\n${custom}\n` : `${block}\n`;
   }
-  const before = source.slice(0, start);
-  const after = source.slice(end + END_MARKER.length);
-  return `${before}${block}${after}`;
+  const custom = `${source.slice(0, start)}${source.slice(end + END_MARKER.length)}`.trim();
+  return custom ? `${block}\n\n${custom}\n` : `${block}\n`;
 }

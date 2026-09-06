@@ -101,6 +101,7 @@ describe('"nimm mein Illustrious-Template und füge den Akira-LoRA hinzu"', () =
     const t = currentTemplate("hash-illustrious");
     assert.match(t.onstart, /bash \/workspace\/repo\/comfyui\/onstart\.sh/);
     assert.match(t.onstart, /akira\.safetensors/);
+    assert.ok(t.onstart.indexOf("akira.safetensors") < t.onstart.indexOf("bash /workspace/repo/comfyui/onstart.sh"));
   });
 
   test("edits in place — it never creates a second template", () => {

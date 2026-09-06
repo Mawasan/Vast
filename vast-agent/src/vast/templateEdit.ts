@@ -201,11 +201,14 @@ export async function setEnvVars(
 
 /**
  * Replaces the free-form part of the start command. Any managed model/LoRA
- * download commands are preserved and re-appended.
+ * download commands are preserved and run before the custom command.
  */
 export async function setCustomStartCommand(templateRef: string, script: string): Promise<VastTemplate> {
   const t = await loadTemplate(templateRef);
   const models = parseManagedModels(t.onstart);
-  const onstart = models.length > 0 ? `${script.trimEnd()}\n\n${buildManagedBlock(models)}\n` : script;
+  const custom = script.trim();
+  const onstart = models.length > 0
+    ? custom ? `${buildManagedBlock(models)}\n\n${custom}\n` : `${buildManagedBlock(models)}\n`
+    : script;
   return updateTemplate(t.hash_id as string, { onstart });
 }

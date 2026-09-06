@@ -28,6 +28,23 @@ test('paid operations preview without network or creating jobs', async t => {
   assert.equal((await call('vast_generate_image',{requestId:'preview-image',endpoint:'x',workflow:{'1':{class_type:'SaveImage',inputs:{}}}})).status,'confirmation_required');
   assert.equal((await call('vast_start_instance',{id:1})).status,'confirmation_required');
 });
+test('offer search unwraps repeated filters objects before calling Vast', async t => {
+  let requestBody;
+  t.mock.method(globalThis, 'fetch', async (_url, opts) => {
+    requestBody = JSON.parse(opts.body);
+    return json({offers:[]});
+  });
+  await call('vast_search_offers', {filters:{filters:{filters:{gpu_name:{eq:'RTX_4090'}}}}});
+  assert.deepEqual(requestBody.gpu_name, {eq:'RTX_4090'});
+  assert.equal(Object.hasOwn(requestBody, 'filters'), false);
+});
+test('offer search rejects an ambiguous nested filters object', async t => {
+  t.mock.method(globalThis, 'fetch', () => { throw new Error('unexpected request'); });
+  await assert.rejects(
+    () => call('vast_search_offers', {filters:{filters:{gpu_name:{eq:'RTX_4090'}}, dph_total:{lte:0.5}}}),
+    /do not mix a nested filters key/
+  );
+});
 test('concurrent/reconnected requests execute once; changed arguments rejected', async () => {
   let count=0, release;
   const blocked = new Promise(r=>release=r);

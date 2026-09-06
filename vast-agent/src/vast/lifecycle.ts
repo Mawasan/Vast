@@ -2,10 +2,31 @@ import { vastClient } from "../core/vastClient.js";
 import { getInstance } from "./instances.js";
 import { resolveTemplate } from "./templates.js";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Accepts accidental {filters:{filters:{...}}} wrappers without sending malformed Vast filters. */
+export function normalizeOfferFilters(input: Record<string, unknown>): Record<string, unknown> {
+  let filters: Record<string, unknown> = input;
+  for (let depth = 0; depth < 8 && Object.hasOwn(filters, "filters"); depth += 1) {
+    const keys = Object.keys(filters);
+    if (keys.length !== 1 || !isRecord(filters.filters)) {
+      throw new Error("Invalid offer filters: put Vast fields directly inside filters; do not mix a nested filters key with other fields.");
+    }
+    filters = filters.filters;
+  }
+  if (Object.hasOwn(filters, "filters")) {
+    throw new Error("Invalid offer filters: too many nested filters wrappers.");
+  }
+  return filters;
+}
+
 export async function searchOffers(filters: Record<string, unknown>, limit = 10, diskGb = 40) {
+  const normalizedFilters = normalizeOfferFilters(filters);
   const result = await vastClient.post("/bundles/", {
     verified: { eq: true }, rentable: { eq: true }, rented: { eq: false },
-    ...filters, type: "ondemand", limit, allocated_storage: diskGb, order: [["dph_total", "asc"]],
+    ...normalizedFilters, type: "ondemand", limit, allocated_storage: diskGb, order: [["dph_total", "asc"]],
   }) as { offers?: Record<string, unknown>[] };
   if (!Array.isArray(result.offers)) throw new Error("Vast returned an invalid offer list.");
   return result.offers;

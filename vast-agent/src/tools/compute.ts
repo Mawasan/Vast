@@ -14,7 +14,7 @@ const timeoutSeconds = z.number().int().min(10).max(1800).default(600);
 const preview = (action: string, details: unknown) => ({ status: "confirmation_required", action, details, message: "Set confirm:true once this operation is authorized. Existing explicit authorization is sufficient." });
 const inferenceShape = { requestId, endpoint, cost, timeoutSeconds, confirm };
 export const computeTools: ToolDef[] = [
-  def({ name: "vast_search_offers", description: "Search current on-demand GPU offers with pricing. Read-only. Filters use Vast syntax, e.g. gpu_name:{eq:'RTX_4090'}, gpu_ram:{gte:24000}, dph_total:{lte:0.5}.",
+  def({ name: "vast_search_offers", description: "Search current on-demand GPU offers with pricing. Read-only. Put Vast fields directly inside filters (never another filters object), e.g. gpu_name:{eq:'RTX_4090'}, gpu_ram:{gte:24000}, dph_total:{lte:0.5}.",
     inputShape: { filters: z.record(z.string(), z.unknown()).default({}), limit: z.number().int().min(1).max(100).default(10), diskGb: z.number().positive().max(10000).default(40) },
     handler: async ({ filters, limit, diskGb }) => searchOffers(filters, limit, diskGb) }),
   def({ name: "vast_rent_instance", description: "Rent an on-demand GPU from a specific offer using an existing template. Rechecks quoted hourly price against maxHourlyUsd. Returns a durable job; poll vast_get_job. Does not auto-stop; storage/traffic charges may apply separately.",
