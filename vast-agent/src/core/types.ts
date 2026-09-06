@@ -63,6 +63,10 @@ export interface ModelResource {
   targetPath: string;
   /** Optional filename override; inferred from the source if omitted. */
   filename?: string;
+  /** Pinned direct download URL, when the source could provide one. */
+  url?: string;
+  /** Source revision the download is pinned to (Hugging Face commit sha). */
+  revision?: string;
   /** LoRA strength/weight, only meaningful for role "lora". */
   weight?: number;
 }

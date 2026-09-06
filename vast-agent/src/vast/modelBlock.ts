@@ -21,7 +21,8 @@ function downloadCommand(resource: ModelResource): string {
       return (
         `${mkdir} && hf download "${ref}"` +
         (filename ? ` "${filename}"` : "") +
-        ` --local-dir "${targetPath}"`
+        ` --local-dir "${targetPath}"` +
+        (resource.revision ? ` --revision "${resource.revision}"` : "")
       );
     case "civitai":
       // -C - resumes a partial download; the token is read from the instance's

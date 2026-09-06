@@ -27,6 +27,8 @@ export interface HfFileInfo {
 }
 
 export interface HfModelInfo extends HfModelSummary {
+  /** Commit sha, used to pin downloads and artifact URLs to an exact revision. */
+  sha?: string;
   gated?: boolean | string;
   private?: boolean;
   files: HfFileInfo[];
@@ -125,6 +127,7 @@ export async function getHuggingFaceModelInfo(repoId: string): Promise<HfModelIn
 
   return {
     ...summary,
+    sha: m.sha as string | undefined,
     gated: m.gated as boolean | string | undefined,
     private: m.private as boolean | undefined,
     files,

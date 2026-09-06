@@ -142,6 +142,31 @@ Misc: `vast_whoami`, `vast_agent_memory`, `vast_check_account_env_vars`
 (names only — a download command that needs `CIVITAI_API_TOKEN` on the
 instance can be checked before it fails there).
 
+## ComfyUI workflows
+
+Downloading a LoRA onto the instance is only half the job — a generation only
+applies it if the workflow graph wires it in. These tools close that gap, as
+pure graph surgery on a workflow JSON (UI/graph format, as in
+`comfyui/workflows/*.json`):
+
+- `comfyui_inspect_workflow` — which checkpoint, which LoRAs at what strength,
+  and whether the graph is structurally sound.
+- `comfyui_sync_workflow_with_template` — rewrites the workflow so it matches a
+  template's attached models: checkpoint becomes the base model, and the LoRA
+  chain becomes exactly the template's LoRAs at their configured weights. The
+  template stays the single source of truth, so "downloaded" and "actually
+  used" can't drift apart.
+- `comfyui_set_workflow_lora` / `comfyui_remove_workflow_lora` — add, re-weight,
+  or splice out one LoRA directly.
+
+A `LoraLoader` is inserted into the MODEL **and** CLIP paths between the
+checkpoint and its consumers, so several LoRAs stack in order. Every patched
+graph is validated before it is returned — link ids referenced from both ends,
+matching slot types, every node still reachable from `SaveImage` — and a patch
+that would produce a broken graph raises instead of returning it. The
+workflow tools take and return JSON; they never touch a running instance's
+filesystem, so the caller decides where the result is written.
+
 ## Tests
 
 ```bash
@@ -151,8 +176,25 @@ npm test
 Runs the tool handlers end to end against a mock Vast.ai API
 (`test/mockVast.js`), covering name resolution, LoRA add/remove/weight, base
 model swaps, env-var surgery, the confirm gate, and that a destroy which
-leaves the instance alive is reported as a failure. No real account is
-touched.
+leaves the instance alive is reported as a failure. The workflow tests run the
+graph surgery against this repo's real `comfyui/workflows/illustrious-xl.json`
+and re-assert the same invariants `comfyui/tests/test_workflows.py` checks. No
+real account is touched.
+
+### Checking the real APIs
+
+The unit tests deliberately never call out to the internet. To verify the real
+Vast.ai / Hugging Face / Civitai APIs, run the read-only smoke test where the
+keys live — your machine or the Railway service:
+
+```bash
+VAST_API_KEY=... HF_TOKEN=... CIVITAI_API_TOKEN=... npm run smoke
+```
+
+It authenticates, lists your templates and instances, resolves one template by
+name, reports which account env vars exist (names only), and searches both
+model sources. It only reads — no create, edit, destroy or delete — and it
+redacts any key from its output.
 
 ## Persistence
 

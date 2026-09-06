@@ -8,6 +8,9 @@ CORE_TYPES = {
     "CheckpointLoaderSimple", "CLIPTextEncode", "EmptyLatentImage",
     "KSampler", "VAEDecode", "SaveImage",
 }
+# Nodes the VAST Agent may splice into a graph when a LoRA is attached to the
+# template. Every other invariant below still has to hold for them.
+OPTIONAL_TYPES = {"LoraLoader"}
 
 
 class WorkflowTests(unittest.TestCase):
@@ -29,7 +32,9 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(workflow["version"], 0.4)
                 nodes = {n["id"]: n for n in workflow["nodes"]}
                 self.assertEqual(len(nodes), len(workflow["nodes"]))
-                self.assertEqual({n["type"] for n in nodes.values()}, CORE_TYPES)
+                present_types = {n["type"] for n in nodes.values()}
+                self.assertLessEqual(CORE_TYPES, present_types)
+                self.assertLessEqual(present_types - CORE_TYPES, OPTIONAL_TYPES)
                 links = {link[0]: link for link in workflow["links"]}
                 self.assertEqual(len(links), len(workflow["links"]))
                 for link_id, source, out_slot, target, in_slot, kind in links.values():

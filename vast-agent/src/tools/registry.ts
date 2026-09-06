@@ -4,6 +4,8 @@ import * as instances from "../vast/instances.js";
 import * as templateEdit from "../vast/templateEdit.js";
 import * as hf from "../sources/huggingface.js";
 import * as civitai from "../sources/civitai.js";
+import * as comfy from "../comfyui/workflow.js";
+import type { Workflow } from "../comfyui/workflow.js";
 import { confirmationRequired, needsConfirmation } from "../core/confirm.js";
 import { store } from "../core/store.js";
 
@@ -18,6 +20,10 @@ export interface ToolDef<Shape extends z.ZodRawShape = z.ZodRawShape> {
 const templateRef = z
   .string()
   .describe("Template name (partial, case-insensitive), hash_id, or numeric id — e.g. \"illustrious\"");
+
+const workflowSchema = z
+  .record(z.string(), z.unknown())
+  .describe("A ComfyUI workflow JSON in the UI/graph format (nodes + links), parsed as an object");
 
 const modelResourceFields = {
   source: z
@@ -270,6 +276,77 @@ export const tools: ToolDef[] = [
       });
       if (!created.hash_id) throw new Error("Template was created but no hash_id was returned by Vast.ai.");
       return templateEdit.setBaseModel(created.hash_id, { name, source, ref, targetPath });
+    },
+  }),
+
+  // ---- ComfyUI workflows ----------------------------------------------------
+  def({
+    name: "comfyui_inspect_workflow",
+    description:
+      "Read a ComfyUI workflow JSON: which checkpoint it loads, which LoRAs are wired in at what strength, and whether the graph is structurally valid.",
+    inputShape: { workflow: workflowSchema },
+    handler: async ({ workflow }) => {
+      const wf = workflow as unknown as Workflow;
+      return {
+        checkpoint: comfy.getCheckpoint(wf),
+        loras: comfy.listLoras(wf),
+        validation: comfy.validateWorkflow(wf),
+      };
+    },
+  }),
+
+  def({
+    name: "comfyui_sync_workflow_with_template",
+    description:
+      "Rewrite a ComfyUI workflow so it matches a Vast template's attached models: the checkpoint becomes the template's base model and the LoRA chain becomes exactly the template's LoRAs at their configured weights. Returns the patched workflow, the list of changes, and a validation result. This is what makes a downloaded LoRA actually get applied at generation time.",
+    inputShape: { template: templateRef, workflow: workflowSchema },
+    handler: async ({ template, workflow }) => {
+      const resources = await templateEdit.listModelsInTemplate(template);
+      const result = comfy.syncWorkflowToResources(
+        structuredClone(workflow) as unknown as Workflow,
+        resources
+      );
+      if (!result.validation.valid) {
+        throw new Error(
+          `Refusing to return a broken workflow: ${result.validation.errors.join("; ")}`
+        );
+      }
+      return result;
+    },
+  }),
+
+  def({
+    name: "comfyui_set_workflow_lora",
+    description:
+      "Add a LoRA to a ComfyUI workflow, or change its strength if already present. Chains onto any LoRAs already wired in. Returns the patched workflow.",
+    inputShape: {
+      workflow: workflowSchema,
+      filename: z.string().describe("LoRA file as it exists in ComfyUI's models/loras directory"),
+      strength: z.number().default(1.0),
+      url: z.string().optional().describe("Pinned download URL, recorded on the node like this repo records checkpoints"),
+    },
+    handler: async ({ workflow, filename, strength, url }) => {
+      const wf = comfy.addLora(structuredClone(workflow) as unknown as Workflow, {
+        filename,
+        strengthModel: strength,
+        strengthClip: strength,
+        url,
+      });
+      const validation = comfy.validateWorkflow(wf);
+      if (!validation.valid) throw new Error(`Refusing to return a broken workflow: ${validation.errors.join("; ")}`);
+      return { workflow: wf, loras: comfy.listLoras(wf), validation };
+    },
+  }),
+
+  def({
+    name: "comfyui_remove_workflow_lora",
+    description: "Remove a LoRA from a ComfyUI workflow, reconnecting the graph around it. Returns the patched workflow.",
+    inputShape: { workflow: workflowSchema, filename: z.string() },
+    handler: async ({ workflow, filename }) => {
+      const wf = comfy.removeLora(structuredClone(workflow) as unknown as Workflow, filename);
+      const validation = comfy.validateWorkflow(wf);
+      if (!validation.valid) throw new Error(`Refusing to return a broken workflow: ${validation.errors.join("; ")}`);
+      return { workflow: wf, loras: comfy.listLoras(wf), validation };
     },
   }),
 

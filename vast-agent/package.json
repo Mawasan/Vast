@@ -12,7 +12,8 @@
     "start:http": "VAST_AGENT_TRANSPORT=http node dist/index.js",
     "start:stdio": "VAST_AGENT_TRANSPORT=stdio node dist/index.js",
     "dev:http": "tsc -p tsconfig.json && VAST_AGENT_TRANSPORT=http node dist/index.js",
-    "dev:stdio": "tsc -p tsconfig.json && VAST_AGENT_TRANSPORT=stdio node dist/index.js"
+    "dev:stdio": "tsc -p tsconfig.json && VAST_AGENT_TRANSPORT=stdio node dist/index.js",
+    "smoke": "tsc -p tsconfig.json && node scripts/smoke.js"
   },
   "engines": {
     "node": ">=20"

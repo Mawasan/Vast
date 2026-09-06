@@ -6,6 +6,8 @@ import { getHuggingFaceModelInfo, pickPrimaryWeightFile } from "../sources/huggi
 import { pickPrimaryCivitaiFile, resolveCivitaiVersion } from "../sources/civitai.js";
 import type { ModelResource, ModelRole, ModelSourceKind, VastTemplate } from "../core/types.js";
 
+const HF_HOST = "https://huggingface.co";
+
 /**
  * Surgical template mutations. Each of these resolves the template (by name,
  * id, or hash), changes exactly the thing being asked for, and writes the
@@ -85,16 +87,22 @@ async function resolveResource(
   let filename = req.filename;
   let name = req.name;
   let ref = req.ref;
+  let url: string | undefined;
+  let revision: string | undefined;
 
   if (req.source === "huggingface") {
-    if (!filename || !name) {
-      try {
-        const info = await getHuggingFaceModelInfo(req.ref);
-        filename ??= pickPrimaryWeightFile(info.files)?.path;
-        name ??= info.id.split("/").pop() ?? info.id;
-      } catch {
-        // Leave unresolved; the generated command still works, just coarser.
+    try {
+      const info = await getHuggingFaceModelInfo(req.ref);
+      filename ??= pickPrimaryWeightFile(info.files)?.path;
+      name ??= info.id.split("/").pop() ?? info.id;
+      revision = info.sha;
+      // Pin to the commit sha rather than a moving branch, so a workflow
+      // artifact URL stays reproducible.
+      if (filename && revision) {
+        url = `${HF_HOST}/${req.ref}/resolve/${revision}/${filename}`;
       }
+    } catch {
+      // Leave unresolved; the generated command still works, just coarser.
     }
     await store.rememberHuggingFaceRepo(req.ref);
   } else if (req.source === "civitai") {
@@ -102,12 +110,16 @@ async function resolveResource(
       const version = await resolveCivitaiVersion(Number(req.ref));
       // Downloads need the *version* id, which may differ from what was passed.
       ref = String(version.id);
-      filename ??= pickPrimaryCivitaiFile(version)?.name;
+      const file = pickPrimaryCivitaiFile(version);
+      filename ??= file?.name;
       name ??= version.name;
+      url = `https://civitai.com/api/download/models/${version.id}`;
     } catch {
       // Same best-effort fallback as above.
     }
     await store.rememberCivitaiModel(req.ref);
+  } else {
+    url = req.ref;
   }
 
   name ??= req.ref.split("/").pop() ?? req.ref;
@@ -119,6 +131,8 @@ async function resolveResource(
     ref,
     targetPath: req.targetPath ?? defaultTargetPath(t, role),
     ...(filename ? { filename } : {}),
+    ...(url ? { url } : {}),
+    ...(revision ? { revision } : {}),
     ...(req.weight !== undefined ? { weight: req.weight } : {}),
   };
 }
