@@ -4,6 +4,8 @@ import { getJob, submitJob } from "../core/jobs.js";
 import { searchOffers, rentInstance, setInstanceState } from "../vast/lifecycle.js";
 import { runInference } from "../vast/inference.js";
 import { vastClient } from "../core/vastClient.js";
+import { listModelsInTemplate } from "../vast/templateEdit.js";
+import { buildAnimaApiWorkflow } from "../comfyui/anima.js";
 
 function def<S extends z.ZodRawShape>(tool: ToolDef<S>): ToolDef { return tool as unknown as ToolDef; }
 const requestId = z.string().min(1).max(160).describe("Unique operation ID. Reuse exactly this ID and arguments after a disconnect to avoid duplicate billing.");
@@ -39,6 +41,29 @@ export const computeTools: ToolDef[] = [
     handler: async ({ requestId, confirm, workflow, ...input }) => {
       const args = { ...input, path: "/generate/sync", payload: { input: { request_id: requestId, workflow_json: workflow } } };
       return confirm ? submitJob(requestId, "image", args, () => runInference(args)) : preview("image_generation", { endpoint: input.endpoint });
+    } }),
+  def({ name: "vast_generate_anima_image", description: "Generate an image with an AKIRA Anima template on an existing Vast Serverless ComfyUI endpoint. Builds the correct UNET/Anima workflow automatically and chains every compatible LoRA attached to the template at its saved weight. Returns a durable job; poll vast_get_job.",
+    inputShape: {
+      ...inferenceShape,
+      template: z.string().min(1),
+      prompt: z.string().min(1),
+      negativePrompt: z.string().optional(),
+      width: z.number().int().min(512).max(2048).multipleOf(64).default(896),
+      height: z.number().int().min(512).max(2048).multipleOf(64).default(1152),
+      steps: z.number().int().min(1).max(100).default(35),
+      cfg: z.number().finite().min(0).max(30).default(4.5),
+      samplerName: z.string().default("er_sde"),
+      scheduler: z.string().default("simple"),
+      seed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    },
+    handler: async ({ requestId, confirm, template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, ...input }) => {
+      const operation = { template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, ...input };
+      if (!confirm) return preview("anima_image_generation", { endpoint: input.endpoint, template, width, height });
+      return submitJob(requestId, "anima_image", operation, async () => {
+        const resources = await listModelsInTemplate(template);
+        const workflow = buildAnimaApiWorkflow(resources, { prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed });
+        return runInference({ ...input, path: "/generate/sync", payload: { input: { request_id: requestId, workflow_json: workflow } } });
+      });
     } }),
   def({ name: "vast_get_job", description: "Get the durable result of a rent/inference job after reconnecting. running: poll again; completed: inspect result; unknown: inspect Vast before retrying. A server restart never automatically replays a billed operation.", inputShape: { requestId }, handler: async ({ requestId }) => getJob(requestId) }),
 ];
