@@ -69,8 +69,17 @@ async function request(
         headers,
         body: hasBody ? JSON.stringify(opts.json ?? {}) : undefined,
         signal: AbortSignal.timeout(30000),
-        redirect: "error",
+        redirect: "manual",
       });
+      // Some Vast read endpoints canonicalize their trailing slash. Follow only
+      // same-origin GET redirects; never replay a mutation or forward keys elsewhere.
+      if (method === "GET" && [301, 302, 307, 308].includes(res.status)) {
+        const location = res.headers.get("location");
+        if (!location) throw new Error("Vast returned an empty redirect.");
+        const target = new URL(location, url);
+        if (target.origin !== new URL(url).origin) throw new Error("Vast redirected to a different origin; credentials were not forwarded.");
+        res = await fetch(target, { headers, signal: AbortSignal.timeout(30000), redirect: "error" });
+      }
     } catch (err) {
       lastErr = err;
       if (attempt < maxAttempts) {
