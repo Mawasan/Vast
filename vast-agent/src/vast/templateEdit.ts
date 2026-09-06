@@ -38,7 +38,66 @@ async function writeModels(t: VastTemplate, resources: ModelResource[]) {
  */
 function defaultTargetPath(t: VastTemplate, role: ModelRole): string {
   const comfyDir = parseDockerEnv(t.env).envVars.COMFYUI_DIR ?? "/workspace/ComfyUI";
-  return `${comfyDir}/models/${role === "lora" ? "loras" : "checkpoints"}`;
+  const directory = role === "lora"
+    ? "loras"
+    : role === "text_encoder"
+      ? "text_encoders"
+      : role === "vae"
+        ? "vae"
+        : "checkpoints";
+  return `${comfyDir}/models/${directory}`;
+}
+
+const ANIMA_TEXT_ENCODER_URL = "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors";
+const ANIMA_VAE_URL = "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/vae/qwen_image_vae.safetensors";
+
+export interface RuntimeReadiness {
+  template: VastTemplate;
+  resources: ModelResource[];
+  updated: boolean;
+}
+
+/**
+ * Anima checkpoints are diffusion models, not self-contained SDXL checkpoints.
+ * Every Anima worker also needs the shared Qwen text encoder and Qwen Image
+ * VAE. Keep those dependencies in the template's managed block so a freshly
+ * autoscaled worker is ready before ComfyUI receives a workflow.
+ */
+export async function ensureAnimaRuntime(templateRef: string): Promise<RuntimeReadiness> {
+  const template = await loadTemplate(templateRef);
+  const resources = parseManagedModels(template.onstart);
+  const base = resources.find((resource) => resource.role === "base");
+  const isAnima = Boolean(base?.targetPath.replace(/\\/g, "/").includes("/diffusion_models"));
+  if (!isAnima) return { template, resources, updated: false };
+
+  const comfyDir = parseDockerEnv(template.env).envVars.COMFYUI_DIR ?? "/workspace/ComfyUI";
+  const required: ModelResource[] = [
+    {
+      name: "Anima Qwen text encoder",
+      role: "text_encoder",
+      source: "url",
+      ref: ANIMA_TEXT_ENCODER_URL,
+      url: ANIMA_TEXT_ENCODER_URL,
+      targetPath: `${comfyDir}/models/text_encoders`,
+      filename: "qwen_3_06b_base.safetensors",
+    },
+    {
+      name: "Anima Qwen Image VAE",
+      role: "vae",
+      source: "url",
+      ref: ANIMA_VAE_URL,
+      url: ANIMA_VAE_URL,
+      targetPath: `${comfyDir}/models/vae`,
+      filename: "qwen_image_vae.safetensors",
+    },
+  ];
+  const missing = required.filter((requiredResource) => !resources.some((resource) =>
+    resource.role === requiredResource.role || resource.filename === requiredResource.filename
+  ));
+  if (missing.length === 0) return { template, resources, updated: false };
+
+  const updatedTemplate = await writeModels(template, [...resources, ...missing]);
+  return { template: updatedTemplate, resources: [...resources, ...missing], updated: true };
 }
 
 export interface ResourceRequest {

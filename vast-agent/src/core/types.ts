@@ -49,7 +49,7 @@ export type QueryOp = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "notin
 export type SelectFilters = Record<string, Partial<Record<QueryOp, unknown>>>;
 
 export type ModelSourceKind = "huggingface" | "civitai" | "url";
-export type ModelRole = "base" | "lora";
+export type ModelRole = "base" | "lora" | "text_encoder" | "vae";
 
 /** One model or LoRA resource attached to a template's managed download block. */
 export interface ModelResource {

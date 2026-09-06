@@ -114,6 +114,28 @@ test('prepares one scale-to-zero endpoint and workergroup for a template', async
   assert.equal(writes[0].max_workers,1);
   assert.equal(writes[1].template_hash,'hash-akira');
 });
+test('repairs an Anima template and reprovisions its workergroup before reuse', async t => {
+  const baseResource={name:'Anima',role:'base',source:'url',ref:'https://example.com/anima',filename:'anima.safetensors',targetPath:'/workspace/ComfyUI/models/diffusion_models'};
+  const marker=`# >>> vast-agent:models >>>\n# vast-agent:models:json=${JSON.stringify([baseResource])}\n# <<< vast-agent:models <<<`;
+  let template={id:78,hash_id:'hash-anima',name:'AKIRA - Anima',creator_id:42,image:'vastai/comfy',onstart:marker};
+  const deletes=[]; const writes=[];
+  t.mock.method(globalThis,'fetch',async (url,opts={})=>{
+    const path=new URL(url).pathname;
+    if(path.endsWith('/template/') && opts.method==='GET') return json({templates:[template]});
+    if(path.endsWith('/template/') && opts.method==='PUT') { template={...template,...JSON.parse(opts.body)}; return json({template}); }
+    if(path.endsWith('/endptjobs') || (path.endsWith('/endptjobs/') && opts.method==='GET')) return json({results:[{id:502,endpoint_name:'akira-anima',endpoint_state:'active'}]});
+    if(path.endsWith('/workergroups/') && opts.method==='GET') return json({results:[{id:602,endpoint_id:502,endpoint_name:'akira-anima',template_id:78,template_hash:'hash-anima'}]});
+    if(path.endsWith('/workergroups/602/') && opts.method==='DELETE') { deletes.push(path); return json({success:true}); }
+    if(path.endsWith('/workergroups/') && opts.method==='POST') { writes.push(JSON.parse(opts.body)); return json({id:603}); }
+    throw new Error(`unexpected path ${path} ${opts.method}`);
+  });
+  const result=await prepareTemplateEndpoint('hash-anima');
+  assert.equal(result.templateUpdated,true);
+  assert.deepEqual(deletes,['/api/v0/workergroups/602/']);
+  assert.equal(writes[0].endpoint_id,502);
+  assert.match(template.onstart,/qwen_3_06b_base\.safetensors/);
+  assert.match(template.onstart,/qwen_image_vae\.safetensors/);
+});
 test('image request routes auth_data separately and preserves complete workflow', async t => {
   let sends=0;
   t.mock.method(globalThis,'fetch',async (url,opts)=>{
@@ -144,9 +166,9 @@ test('private worker destinations rejected; failed worker is not retried', async
   let sends=0;
   t.mock.method(globalThis,'fetch',async url=>{
     if(String(url).includes('run.vast.ai')) return json({url:'http://8.8.8.8:8000',signature:'signed',reqnum:7});
-    sends++; return new Response('failure',{status:500});
+    sends++; return new Response('{"error":"missing model"}',{status:500});
   });
-  await assert.rejects(()=>runInference({endpoint:'test',path:'/generate/sync',payload:{},cost:100,timeoutSeconds:10}),/500/); assert.equal(sends,1);
+  await assert.rejects(()=>runInference({endpoint:'test',path:'/generate/sync',payload:{},cost:100,timeoutSeconds:10}),/500.*missing model/); assert.equal(sends,1);
 });
 test('REST schemas and MCP expose the same tools, with protected execution and public discovery', async () => {
   const server=createHttpApp().listen(0,'127.0.0.1');

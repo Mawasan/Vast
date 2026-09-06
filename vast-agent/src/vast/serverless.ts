@@ -1,5 +1,5 @@
 import { vastClient } from "../core/vastClient.js";
-import { resolveTemplate } from "./templates.js";
+import { ensureAnimaRuntime } from "./templateEdit.js";
 
 export type EndpointSummary = {
   id: number;
@@ -56,19 +56,30 @@ function endpointNameFor(templateName: string, hash: string): string {
 }
 
 export async function prepareTemplateEndpoint(templateRef: string, requestedName?: string) {
-  const template = await resolveTemplate(templateRef);
+  const readiness = await ensureAnimaRuntime(templateRef);
+  const template = readiness.template;
   if (!template.hash_id || typeof template.id !== "number") throw new Error("The selected template has no usable Vast id/hash.");
   const [endpoints, workergroups] = await Promise.all([listEndpoints(), listWorkergroups()]);
-  const existingGroup = workergroups.find((group) => group.templateHash === template.hash_id || group.templateId === template.id);
+  let existingGroup = workergroups.find((group) => group.templateHash === template.hash_id || group.templateId === template.id);
+  let endpointToReuse = existingGroup
+    ? endpoints.find((item) => item.id === existingGroup?.endpointId || item.endpointName === existingGroup?.endpointName)
+    : undefined;
+  if (readiness.updated && existingGroup) {
+    // A running/cached worker cannot see a changed onstart script. Recreate
+    // only its workergroup so the existing endpoint remains stable while the
+    // next test worker provisions the newly attached runtime files.
+    await vastClient.delete(`/workergroups/${existingGroup.id}/`);
+    existingGroup = undefined;
+  }
   if (existingGroup) {
     const endpoint = endpoints.find((item) => item.id === existingGroup.endpointId || item.endpointName === existingGroup.endpointName);
     if (!endpoint) throw new Error("A workergroup exists for this template, but its endpoint could not be found.");
     return { created: false, template: template.name, templateHash: template.hash_id, endpoint, workergroup: existingGroup };
   }
 
-  const endpointName = requestedName?.trim() || endpointNameFor(template.name ?? template.hash_id, template.hash_id);
+  const endpointName = requestedName?.trim() || endpointToReuse?.endpointName || endpointNameFor(template.name ?? template.hash_id, template.hash_id);
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,63}$/.test(endpointName)) throw new Error("Endpoint name must be 3-64 letters, numbers, dots, underscores, or hyphens.");
-  let endpoint = endpoints.find((item) => item.endpointName === endpointName);
+  let endpoint = endpointToReuse ?? endpoints.find((item) => item.endpointName === endpointName);
   let createdEndpoint = false;
   if (!endpoint) {
     const response = await vastClient.post("/endptjobs/", {
@@ -109,6 +120,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
     if (id === null) throw new Error("Vast created no usable workergroup id.");
     return {
       created: true,
+      templateUpdated: readiness.updated,
       template: template.name,
       templateHash: template.hash_id,
       endpoint,

@@ -119,7 +119,13 @@ export async function runInference(input: { endpoint: string; path: string; payl
     signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
   });
   // Never retry this POST: a lost response can still represent a billed generation.
-  if (!response.ok) throw new Error(`Worker returned HTTP ${response.status}. It may have processed the request; inspect the worker before retrying.`);
+  if (!response.ok) {
+    const detail = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 1200);
+    throw new Error(
+      `Worker returned HTTP ${response.status}${detail ? `: ${detail}` : ""}. ` +
+      "It may have processed the request; inspect the worker before retrying."
+    );
+  }
   const chunks: Uint8Array[] = [];
   let size = 0;
   if (!response.body) throw new Error("Worker returned an empty response.");

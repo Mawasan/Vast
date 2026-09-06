@@ -30,6 +30,16 @@ test("Anima workflow uses UNETLoader and model-only LoRAs in order", () => {
   assert.equal(Object.values(workflow).at(-1).class_type, "SaveImage");
 });
 
+test("Anima workflow uses attached text encoder and VAE resources", () => {
+  const workflow = buildAnimaApiWorkflow([
+    base,
+    { ...base, name: "encoder", role: "text_encoder", filename: "custom-qwen.safetensors", targetPath: "/workspace/ComfyUI/models/text_encoders" },
+    { ...base, name: "vae", role: "vae", filename: "custom-vae.safetensors", targetPath: "/workspace/ComfyUI/models/vae" },
+  ], { prompt: "1girl" });
+  assert.equal(workflow["2"].inputs.clip_name, "custom-qwen.safetensors");
+  assert.equal(workflow["3"].inputs.vae_name, "custom-vae.safetensors");
+});
+
 test("Anima workflow rejects an SDXL checkpoint template", () => {
   assert.throws(
     () => buildAnimaApiWorkflow([{ ...base, targetPath: "/workspace/ComfyUI/models/checkpoints" }], { prompt: "test" }),

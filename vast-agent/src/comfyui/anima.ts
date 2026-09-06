@@ -31,6 +31,8 @@ export function buildAnimaApiWorkflow(
   if (!base.targetPath.replace(/\\/g, "/").includes("/diffusion_models")) {
     throw new Error("The selected template is not an Anima template: its base model is not in models/diffusion_models.");
   }
+  const textEncoder = resources.find((resource) => resource.role === "text_encoder");
+  const vae = resources.find((resource) => resource.role === "vae");
 
   const width = options.width ?? 896;
   const height = options.height ?? 1152;
@@ -46,12 +48,12 @@ export function buildAnimaApiWorkflow(
     },
     "2": {
       class_type: "CLIPLoader",
-      inputs: { clip_name: "qwen_3_06b_base.safetensors", type: "stable_diffusion", device: "default" },
+      inputs: { clip_name: textEncoder ? fileOf(textEncoder) : "qwen_3_06b_base.safetensors", type: "stable_diffusion", device: "default" },
       _meta: { title: "Anima text encoder" },
     },
     "3": {
       class_type: "VAELoader",
-      inputs: { vae_name: "qwen_image_vae.safetensors" },
+      inputs: { vae_name: vae ? fileOf(vae) : "qwen_image_vae.safetensors" },
       _meta: { title: "Anima VAE" },
     },
   };
