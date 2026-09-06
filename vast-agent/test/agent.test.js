@@ -179,6 +179,20 @@ describe("base model swap", () => {
     assert.equal(bases[0].targetPath, "/workspace/ComfyUI/models/checkpoints");
     assert.ok(models.some((m) => m.name === "neon"), "LoRAs survive a base model swap");
   });
+
+  test("a direct Civitai download URL uses the account token when one is available", async () => {
+    await call("vast_set_template_base_model", {
+      template: "illustrious",
+      name: "kodoranime",
+      source: "url",
+      ref: "https://civitai.com/api/download/models/3285126?fileId=3169463",
+      filename: "kodoranime.safetensors",
+    });
+    const script = currentTemplate("hash-illustrious").onstart;
+    assert.match(script, /CIVITAI_API_TOKEN/);
+    assert.match(script, /Authorization: Bearer \$CIVITAI_API_TOKEN/);
+    assert.match(script, /fileId=3169463/);
+  });
 });
 
 describe("env vars stay surgical", () => {

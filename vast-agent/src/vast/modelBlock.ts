@@ -13,6 +13,14 @@ const STATE_PREFIX = "# vast-agent:models:json=";
 function downloadCommand(resource: ModelResource): string {
   const { source, ref, targetPath, filename } = resource;
   const mkdir = `mkdir -p "${targetPath}"`;
+  const curlDownload = (url: string, output: string, supportsCivitaiToken = false) => {
+    if (!supportsCivitaiToken) return `curl -fL -C - -o "${output}" "${url}"`;
+    return (
+      `if [ -n "\${CIVITAI_API_TOKEN:-}" ]; then ` +
+      `curl -fL -C - -H "Authorization: Bearer $CIVITAI_API_TOKEN" -o "${output}" "${url}"; ` +
+      `else curl -fL -C - -o "${output}" "${url}"; fi`
+    );
+  };
   switch (source) {
     case "huggingface":
       // `hf` is the current Hugging Face CLI (huggingface-cli is deprecated).
@@ -31,15 +39,15 @@ function downloadCommand(resource: ModelResource): string {
       {
         const output = `${targetPath}/${filename ?? `${resource.name}.safetensors`}`;
         const url = `https://civitai.com/api/download/models/${ref}`;
-        return (
-          `${mkdir} && if [ -n "\${CIVITAI_API_TOKEN:-}" ]; then ` +
-          `curl -fL -C - -H "Authorization: Bearer $CIVITAI_API_TOKEN" -o "${output}" "${url}"; ` +
-          `else curl -fL -C - -o "${output}" "${url}"; fi`
-        );
+        return `${mkdir} && ${curlDownload(url, output, true)}`;
       }
     case "url":
     default:
-      return `${mkdir} && curl -fL -C - -o "${targetPath}/${filename ?? resource.name}" "${ref}"`;
+      return `${mkdir} && ${curlDownload(
+        ref,
+        `${targetPath}/${filename ?? resource.name}`,
+        /^https:\/\/(?:www\.)?civitai\.com\/api\/download\/models\//i.test(ref)
+      )}`;
   }
 }
 
