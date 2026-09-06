@@ -14,7 +14,5 @@ ENV VAST_AGENT_DATA_DIR=/data
 COPY package.json ./
 RUN npm install --omit=dev
 COPY --from=build /app/dist ./dist
-VOLUME ["/data"]
-
 EXPOSE 8080
 CMD ["node", "dist/index.js"]
