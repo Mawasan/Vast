@@ -1,3 +1,28 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * Loads a `.env` file next to the package (or in the working directory) so
+ * keys can live in one file instead of being exported by hand every session.
+ * Real environment variables always win — on Railway the platform sets them
+ * and no .env exists, which is why a missing file is not an error.
+ */
+function loadEnvFile(): void {
+  const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  for (const candidate of [join(packageRoot, ".env"), join(process.cwd(), ".env")]) {
+    if (!existsSync(candidate)) continue;
+    try {
+      process.loadEnvFile(candidate);
+    } catch {
+      // A malformed .env must not stop the agent from starting on real env vars.
+    }
+    return;
+  }
+}
+
+loadEnvFile();
+
 function env(name: string, fallback?: string): string | undefined {
   const v = process.env[name];
   return v && v.length > 0 ? v : fallback;

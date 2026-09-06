@@ -25,6 +25,21 @@ cp .env.example .env   # fill in VAST_API_KEY at minimum
 npm run build
 ```
 
+The agent reads `vast-agent/.env` on startup, so the keys only have to be
+written down once — no exporting them every session, and it works the same on
+Windows, macOS and Linux. Real environment variables always take precedence
+over the file, which is why Railway (where the platform sets them and no
+`.env` exists) needs no change. `.env` is gitignored.
+
+On Windows, create it in PowerShell (note: the Unix `KEY=value command`
+prefix does **not** exist in PowerShell):
+
+```powershell
+cd vast-agent
+Copy-Item .env.example .env
+notepad .env            # paste the keys, save
+```
+
 Required/optional environment variables (see `.env.example`):
 
 | Variable | Required | Purpose |
@@ -187,9 +202,15 @@ The unit tests deliberately never call out to the internet. To verify the real
 Vast.ai / Hugging Face / Civitai APIs, run the read-only smoke test where the
 keys live — your machine or the Railway service:
 
+With the keys in `vast-agent/.env`, it is just:
+
 ```bash
-VAST_API_KEY=... HF_TOKEN=... CIVITAI_API_TOKEN=... npm run smoke
+npm run smoke
 ```
+
+(Windows PowerShell: the same command — the keys come from `.env`. If you
+would rather set them per session instead, PowerShell uses
+`$env:VAST_API_KEY = "..."`, not the Unix `KEY=value` prefix form.)
 
 It authenticates, lists your templates and instances, resolves one template by
 name, reports which account env vars exist (names only), and searches both
