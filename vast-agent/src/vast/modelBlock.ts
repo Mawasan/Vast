@@ -12,28 +12,28 @@ const STATE_PREFIX = "# vast-agent:models:json=";
 
 function downloadCommand(resource: ModelResource): string {
   const { source, ref, targetPath, filename } = resource;
+  const mkdir = `mkdir -p "${targetPath}"`;
   switch (source) {
     case "huggingface":
+      // `hf` is the current Hugging Face CLI (huggingface-cli is deprecated).
+      // With a resolved filename only that one weight file is fetched, instead
+      // of the whole repo including duplicate formats.
       return (
-        `mkdir -p "${targetPath}" && ` +
-        `huggingface-cli download "${ref}"` +
+        `${mkdir} && hf download "${ref}"` +
         (filename ? ` "${filename}"` : "") +
-        ` --local-dir "${targetPath}"` +
-        ` ${filename ? "" : "--local-dir-use-symlinks False"}`.trimEnd()
+        ` --local-dir "${targetPath}"`
       );
     case "civitai":
+      // -C - resumes a partial download; the token is read from the instance's
+      // environment and never written into the template itself.
       return (
-        `mkdir -p "${targetPath}" && ` +
-        `curl -L -H "Authorization: Bearer $CIVITAI_API_TOKEN" ` +
+        `${mkdir} && curl -fL -C - -H "Authorization: Bearer $CIVITAI_API_TOKEN" ` +
         `-o "${targetPath}/${filename ?? `${resource.name}.safetensors`}" ` +
         `"https://civitai.com/api/download/models/${ref}"`
       );
     case "url":
     default:
-      return (
-        `mkdir -p "${targetPath}" && ` +
-        `curl -L -o "${targetPath}/${filename ?? resource.name}" "${ref}"`
-      );
+      return `${mkdir} && curl -fL -C - -o "${targetPath}/${filename ?? resource.name}" "${ref}"`;
   }
 }
 
@@ -78,13 +78,4 @@ export function injectManagedBlock(onstart: string | undefined | null, resources
   const before = source.slice(0, start);
   const after = source.slice(end + END_MARKER.length);
   return `${before}${block}${after}`;
-}
-
-/** Returns the onstart script with the managed block stripped out entirely. */
-export function stripManagedBlock(onstart: string | undefined | null): string {
-  const source = onstart ?? "";
-  const start = source.indexOf(START_MARKER);
-  const end = source.indexOf(END_MARKER);
-  if (start === -1 || end === -1) return source;
-  return (source.slice(0, start) + source.slice(end + END_MARKER.length)).trim();
 }

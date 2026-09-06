@@ -15,14 +15,31 @@ export interface ToolDef<Shape extends z.ZodRawShape = z.ZodRawShape> {
   handler: (input: z.infer<z.ZodObject<Shape>>) => Promise<unknown>;
 }
 
+const templateRef = z
+  .string()
+  .describe("Template name (partial, case-insensitive), hash_id, or numeric id — e.g. \"illustrious\"");
+
 const modelResourceFields = {
-  name: z.string().describe("Stable name for this resource, e.g. the LoRA's display name"),
-  source: z.enum(["huggingface", "civitai", "url"]),
+  source: z
+    .enum(["huggingface", "civitai", "url"])
+    .optional()
+    .describe("Optional only when `name` refers to a LoRA this agent has attached before"),
   ref: z
     .string()
-    .describe("HF repo id, Civitai model-version id (as a string), or a direct download URL"),
-  targetPath: z.string().describe("Directory on the instance to download the file(s) into"),
-  filename: z.string().optional(),
+    .optional()
+    .describe("HF repo id, Civitai model or model-version id (as a string), or a direct download URL"),
+  name: z
+    .string()
+    .optional()
+    .describe("Display name; also used to look up a previously used LoRA when source/ref are omitted"),
+  targetPath: z
+    .string()
+    .optional()
+    .describe("Download directory on the instance; defaults to the template's ComfyUI models/loras or models/checkpoints"),
+  filename: z
+    .string()
+    .optional()
+    .describe("Exact weight file; auto-detected from the source when omitted"),
 };
 
 function def<Shape extends z.ZodRawShape>(t: ToolDef<Shape>): ToolDef {
@@ -49,13 +66,10 @@ export const tools: ToolDef[] = [
 
   def({
     name: "vast_get_template",
-    description: "Read a single Vast.ai template's full configuration by hash_id or numeric id.",
-    inputShape: { hashId: z.string().optional(), id: z.number().int().optional() },
-    handler: async ({ hashId, id }) => {
-      const t = await templates.getTemplate({ hashId, id });
-      if (!t) throw new Error("Template not found.");
-      return t;
-    },
+    description:
+      "Read a single Vast.ai template's full configuration. Accepts its name (partial match), hash_id, or numeric id.",
+    inputShape: { template: templateRef },
+    handler: async ({ template }) => templates.resolveTemplate(template),
   }),
 
   def({
@@ -96,7 +110,7 @@ export const tools: ToolDef[] = [
     description:
       "Apply a partial update to an existing template (only the fields you pass are changed; everything else is preserved). Use this instead of creating a new template for small edits.",
     inputShape: {
-      hashId: z.string(),
+      template: templateRef,
       name: z.string().optional(),
       image: z.string().optional(),
       tag: z.string().optional(),
@@ -106,21 +120,25 @@ export const tools: ToolDef[] = [
       recommended_disk_space: z.number().optional(),
       desc: z.string().optional(),
     },
-    handler: async ({ hashId, ...patch }) => templates.updateTemplate(hashId, patch),
+    handler: async ({ template, ...patch }) =>
+      templates.updateTemplate(await templates.resolveTemplateHashId(template), patch),
   }),
 
   def({
     name: "vast_duplicate_template",
     description: "Duplicate an existing template, optionally overriding some fields on the copy.",
     inputShape: {
-      hashId: z.string(),
+      template: templateRef,
       newName: z.string().optional(),
       overrides: z
         .object({ image: z.string().optional(), env: z.string().optional(), onstart: z.string().optional() })
         .optional(),
     },
-    handler: async ({ hashId, newName, overrides }) =>
-      templates.duplicateTemplate(hashId, { ...(overrides ?? {}), ...(newName ? { name: newName } : {}) }),
+    handler: async ({ template, newName, overrides }) =>
+      templates.duplicateTemplate(await templates.resolveTemplateHashId(template), {
+        ...(overrides ?? {}),
+        ...(newName ? { name: newName } : {}),
+      }),
   }),
 
   def({
@@ -128,16 +146,17 @@ export const tools: ToolDef[] = [
     description:
       "Permanently delete a Vast.ai template. Irreversible — requires confirm:true, otherwise returns a preview instead of deleting.",
     destructive: true,
-    inputShape: {
-      hashId: z.string().optional(),
-      templateId: z.number().int().optional(),
-      confirm: z.boolean().optional(),
-    },
-    handler: async ({ hashId, templateId, confirm }) => {
+    inputShape: { template: templateRef, confirm: z.boolean().optional() },
+    handler: async ({ template, confirm }) => {
+      const resolved = await templates.resolveTemplate(template);
       if (needsConfirmation(confirm)) {
-        return confirmationRequired("delete_template", { hashId, templateId });
+        return confirmationRequired("delete_template", {
+          name: resolved.name,
+          hashId: resolved.hash_id,
+          id: resolved.id,
+        });
       }
-      return templates.deleteTemplate({ hashId, templateId });
+      return templates.deleteTemplate({ hashId: resolved.hash_id, templateId: resolved.id });
     },
   }),
 
@@ -145,53 +164,69 @@ export const tools: ToolDef[] = [
   def({
     name: "vast_list_template_models",
     description: "List the base model and LoRAs currently attached to a template's managed download block.",
-    inputShape: { hashId: z.string() },
-    handler: async ({ hashId }) => templateEdit.listModelsInTemplate(hashId),
+    inputShape: { template: templateRef },
+    handler: async ({ template }) => templateEdit.listModelsInTemplate(template),
   }),
 
   def({
     name: "vast_set_template_base_model",
     description:
-      "Set (or replace) the base model a template downloads on start, from Hugging Face, Civitai, or a direct URL. Keeps the rest of the template unchanged.",
-    inputShape: { hashId: z.string(), ...modelResourceFields },
-    handler: async ({ hashId, ...resource }) => templateEdit.setBaseModel(hashId, resource),
+      "Set (or replace) the base model a template downloads on start, from Hugging Face, Civitai, or a direct URL. The exact weight file and download directory are resolved automatically; the rest of the template is left untouched.",
+    inputShape: { template: templateRef, ...modelResourceFields },
+    handler: async ({ template, ...resource }) => templateEdit.setBaseModel(template, resource),
   }),
 
   def({
     name: "vast_add_lora",
-    description: "Attach a LoRA (from Hugging Face, Civitai, or a direct URL) to a template. Multiple LoRAs can coexist.",
-    inputShape: { hashId: z.string(), ...modelResourceFields, weight: z.number().optional() },
-    handler: async ({ hashId, weight, ...resource }) => templateEdit.addLora(hashId, { ...resource, weight }),
+    description:
+      "Attach a LoRA (Hugging Face, Civitai, or a direct URL) to a template, keeping its existing runtime and any LoRAs already attached.",
+    inputShape: { template: templateRef, ...modelResourceFields, weight: z.number().optional() },
+    handler: async ({ template, ...resource }) => templateEdit.addLora(template, resource),
   }),
 
   def({
     name: "vast_remove_lora",
-    description: "Remove a previously attached LoRA from a template by name.",
-    inputShape: { hashId: z.string(), name: z.string() },
-    handler: async ({ hashId, name }) => templateEdit.removeLora(hashId, name),
+    description: "Remove an attached LoRA from a template by name (partial match is fine).",
+    inputShape: { template: templateRef, name: z.string() },
+    handler: async ({ template, name }) => templateEdit.removeLora(template, name),
   }),
 
   def({
     name: "vast_set_lora_weight",
     description: "Change the strength/weight of a LoRA already attached to a template.",
-    inputShape: { hashId: z.string(), name: z.string(), weight: z.number() },
-    handler: async ({ hashId, name, weight }) => templateEdit.setLoraWeight(hashId, name, weight),
+    inputShape: { template: templateRef, name: z.string(), weight: z.number() },
+    handler: async ({ template, name, weight }) => templateEdit.setLoraWeight(template, name, weight),
   }),
 
   def({
     name: "vast_set_template_env_vars",
     description:
-      'Set or remove individual environment variables on a template without touching the rest of its Docker options. Pass null as a value to remove a key.',
-    inputShape: { hashId: z.string(), vars: z.record(z.string(), z.string().nullable()) },
-    handler: async ({ hashId, vars }) => templateEdit.setEnvVars(hashId, vars),
+      "Set or remove individual environment variables on a template without touching the rest of its Docker options. Pass null as a value to remove a key. Never put secrets here — use Vast.ai's account environment variables for those.",
+    inputShape: { template: templateRef, vars: z.record(z.string(), z.string().nullable()) },
+    handler: async ({ template, vars }) => templateEdit.setEnvVars(template, vars),
   }),
 
   def({
     name: "vast_set_template_start_command",
     description:
       "Replace the custom part of a template's onstart script. Any managed model/LoRA download commands are preserved and re-appended automatically.",
-    inputShape: { hashId: z.string(), script: z.string() },
-    handler: async ({ hashId, script }) => templateEdit.setCustomStartCommand(hashId, script),
+    inputShape: { template: templateRef, script: z.string() },
+    handler: async ({ template, script }) => templateEdit.setCustomStartCommand(template, script),
+  }),
+
+  def({
+    name: "vast_check_account_env_vars",
+    description:
+      "List the NAMES (never the values) of the environment variables set on your Vast.ai account, which instances inherit. Use this to check that e.g. CIVITAI_API_TOKEN or HF_TOKEN exists before a template's download command relies on it.",
+    inputShape: {},
+    handler: async () => {
+      const names = await templates.listAccountEnvVarNames();
+      return {
+        names,
+        hfTokenPresent: names.includes("HF_TOKEN"),
+        civitaiTokenPresent: names.includes("CIVITAI_API_TOKEN"),
+      };
+    },
   }),
 
   def({
@@ -200,30 +235,30 @@ export const tools: ToolDef[] = [
       "Turn a Hugging Face or Civitai model into a Vast.ai template. If existingTemplateHashId is given, reuses that template's runtime/image and only sets the base model on it (preferred); otherwise creates a new minimal template around the model.",
     inputShape: {
       source: z.enum(["huggingface", "civitai"]),
-      ref: z.string().describe("HF repo id, or Civitai model-version id as a string"),
-      targetPath: z.string().default("/workspace/models"),
-      existingTemplateHashId: z.string().optional(),
+      ref: z.string().describe("HF repo id, or Civitai model / model-version id as a string"),
+      targetPath: z.string().optional(),
+      existingTemplate: templateRef
+        .optional()
+        .describe("Name/hash/id of a template to reuse instead of creating a new one — strongly preferred"),
       newTemplateName: z.string().optional(),
       baseImage: z.string().default("vastai/pytorch:latest"),
     },
-    handler: async ({ source, ref, targetPath, existingTemplateHashId, newTemplateName, baseImage }) => {
+    handler: async ({ source, ref, targetPath, existingTemplate, newTemplateName, baseImage }) => {
       let name: string;
       let totalSizeBytes = 0;
       if (source === "huggingface") {
         const info = await hf.getHuggingFaceModelInfo(ref);
-        name = info.id;
-        totalSizeBytes = info.totalSizeBytes;
-        await store.rememberHuggingFaceRepo(ref);
+        name = info.id.split("/").pop() ?? info.id;
+        totalSizeBytes = hf.pickPrimaryWeightFile(info.files)?.sizeBytes ?? info.totalSizeBytes;
       } else {
-        const version = await civitai.getCivitaiModelVersion(Number(ref));
+        const version = await civitai.resolveCivitaiVersion(Number(ref));
         name = version.name;
-        totalSizeBytes = version.files.reduce((sum, f) => sum + (f.sizeKB ?? 0) * 1024, 0);
-        await store.rememberCivitaiModel(ref);
+        totalSizeBytes = (civitai.pickPrimaryCivitaiFile(version)?.sizeKB ?? 0) * 1024;
       }
-      const estimatedDiskGb = Math.max(20, Math.ceil((totalSizeBytes / 1e9) * 1.5));
+      const estimatedDiskGb = Math.max(20, Math.ceil((totalSizeBytes / 1e9) * 1.5) + 10);
 
-      if (existingTemplateHashId) {
-        return templateEdit.setBaseModel(existingTemplateHashId, { name, source, ref, targetPath });
+      if (existingTemplate) {
+        return templateEdit.setBaseModel(existingTemplate, { name, source, ref, targetPath });
       }
 
       const created = await templates.createTemplate({

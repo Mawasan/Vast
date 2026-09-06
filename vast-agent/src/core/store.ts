@@ -108,6 +108,14 @@ export const store = {
     await save(data);
   },
 
+  /** Looks up a previously used LoRA by (partial, case-insensitive) name. */
+  async findLora(name: string): Promise<KnownLora | undefined> {
+    const data = await load();
+    const needle = name.toLowerCase();
+    const all = Object.values(data.loras);
+    return all.find((l) => l.name.toLowerCase() === needle) ?? all.find((l) => l.name.toLowerCase().includes(needle));
+  },
+
   async rememberLora(l: Omit<KnownLora, "lastUsedAt">) {
     const data = await load();
     data.loras[l.name] = { ...l, lastUsedAt: new Date().toISOString() };

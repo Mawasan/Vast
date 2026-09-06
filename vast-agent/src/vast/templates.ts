@@ -78,6 +78,16 @@ export async function getCurrentUser(): Promise<{ id: number; [key: string]: unk
   return res;
 }
 
+/**
+ * Names only of the account-level environment variables Vast.ai injects into
+ * instances. Values are deliberately discarded and never returned or logged —
+ * these are secrets.
+ */
+export async function listAccountEnvVarNames(): Promise<string[]> {
+  const res = (await vastClient.get("/secrets/")) as { secrets?: Record<string, unknown> };
+  return Object.keys(res.secrets ?? {});
+}
+
 export async function searchTemplates(filters?: SelectFilters): Promise<VastTemplate[]> {
   const res = (await vastClient.get("/template/", {
     select_cols: ["*"],
@@ -100,6 +110,50 @@ export async function getTemplate(ref: { hashId?: string; id?: number }): Promis
     : { id: { eq: ref.id } };
   const results = await searchTemplates(filters);
   return results[0] ?? null;
+}
+
+/**
+ * Resolves whatever the user said into one concrete template: a hash_id, a
+ * numeric id, or a (partial, case-insensitive) name like "illustrious".
+ * Ambiguous or unknown names fail loudly listing the real candidates, so a
+ * client never has to look up a hash_id before editing a template by name.
+ */
+export async function resolveTemplate(ref: string): Promise<VastTemplate> {
+  const trimmed = ref.trim();
+  if (!trimmed) throw new Error("No template reference given.");
+
+  if (/^\d+$/.test(trimmed)) {
+    const byId = await getTemplate({ id: Number(trimmed) });
+    if (byId) return byId;
+  } else {
+    const byHash = await getTemplate({ hashId: trimmed });
+    if (byHash) return byHash;
+  }
+
+  const mine = await listMyTemplates();
+  const needle = trimmed.toLowerCase();
+  const exact = mine.filter((t) => (t.name ?? "").toLowerCase() === needle);
+  const matches = exact.length > 0 ? exact : mine.filter((t) => (t.name ?? "").toLowerCase().includes(needle));
+
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    throw new Error(
+      `"${ref}" matches ${matches.length} of your templates: ` +
+        matches.map((t) => `${t.name} (${t.hash_id})`).join(", ") +
+        ". Say which one you mean."
+    );
+  }
+  throw new Error(
+    `No template of yours matches "${ref}". Your templates: ` +
+      (mine.map((t) => t.name ?? `#${t.id}`).join(", ") || "(none)")
+  );
+}
+
+/** Resolves a reference and returns its hash_id, which every write path needs. */
+export async function resolveTemplateHashId(ref: string): Promise<string> {
+  const t = await resolveTemplate(ref);
+  if (!t.hash_id) throw new Error(`Template "${t.name ?? ref}" has no hash_id, so it cannot be edited.`);
+  return t.hash_id;
 }
 
 export async function createTemplate(fields: VastTemplateFields): Promise<VastTemplate> {

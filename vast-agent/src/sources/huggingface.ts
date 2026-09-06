@@ -62,6 +62,21 @@ export async function searchHuggingFaceModels(opts: {
   }));
 }
 
+/**
+ * Picks the single weight file a ComfyUI-style runtime actually wants, so a
+ * download fetches one .safetensors instead of an entire multi-format repo.
+ * Returns undefined when the repo has no obvious single candidate.
+ */
+export function pickPrimaryWeightFile(files: HfFileInfo[]): HfFileInfo | undefined {
+  const weights = files.filter(
+    (f) => /\.(safetensors|ckpt|pt|bin)$/i.test(f.path) && !/\//.test(f.path)
+  );
+  const safetensors = weights.filter((f) => /\.safetensors$/i.test(f.path));
+  const pool = safetensors.length > 0 ? safetensors : weights;
+  if (pool.length === 0) return undefined;
+  return pool.reduce((biggest, f) => ((f.sizeBytes ?? 0) > (biggest.sizeBytes ?? 0) ? f : biggest));
+}
+
 function inferModelType(m: { tags?: string[]; pipelineTag?: string; libraryName?: string }): string {
   const tags = (m.tags ?? []).map((t) => t.toLowerCase());
   if (tags.includes("lora")) return "lora";

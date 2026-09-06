@@ -86,6 +86,32 @@ export async function getCivitaiModelInfo(modelId: number): Promise<CivitaiModel
   return mapModel((await res.json()) as Record<string, unknown>);
 }
 
+/**
+ * Civitai model ids and version ids are both plain numbers, and downloads need
+ * a *version* id. This accepts either: it tries the version endpoint first and
+ * falls back to treating the number as a model id, taking its latest version.
+ */
+export async function resolveCivitaiVersion(id: number): Promise<CivitaiModelVersionSummary> {
+  try {
+    return await getCivitaiModelVersion(id);
+  } catch {
+    const model = await getCivitaiModelInfo(id);
+    if (!model.latestVersion) {
+      throw new Error(`Civitai id ${id} is neither a version nor a model with any published version.`);
+    }
+    return model.latestVersion;
+  }
+}
+
+/** The file a runtime should actually load: the version's primary file, else its largest. */
+export function pickPrimaryCivitaiFile(version: CivitaiModelVersionSummary): CivitaiModelFile | undefined {
+  if (version.files.length === 0) return undefined;
+  return (
+    version.files.find((f) => f.primary) ??
+    version.files.reduce((biggest, f) => ((f.sizeKB ?? 0) > (biggest.sizeKB ?? 0) ? f : biggest))
+  );
+}
+
 export async function getCivitaiModelVersion(versionId: number): Promise<CivitaiModelVersionSummary> {
   const res = await fetch(`${CIVITAI_API}/model-versions/${versionId}`, { headers: headers() });
   if (!res.ok) {

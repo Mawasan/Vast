@@ -98,6 +98,30 @@ additionally polls the instance after destroying it and only reports success
 once the instance id no longer resolves — a stop/pause is never treated as a
 destroy.
 
+## Say it in one sentence
+
+The tools are built so a single natural-language request maps to a single
+call — no hash-hunting or path bookkeeping first:
+
+> "Take my Illustrious template and add the Akira LoRA."
+
+```json
+{ "template": "illustrious", "name": "akira", "source": "civitai", "ref": "1234567" }
+```
+
+- **Templates are addressed by name** (partial, case-insensitive), hash_id, or
+  numeric id. An ambiguous name fails listing the real candidates instead of
+  guessing; an unknown one lists the templates you actually have.
+- **The download directory is derived** from the template's own `COMFYUI_DIR`
+  (falling back to `/workspace/ComfyUI`), into `models/loras` for a LoRA and
+  `models/checkpoints` for a base model. Override with `targetPath` anytime.
+- **The exact weight file is resolved** from Hugging Face or Civitai, so one
+  `.safetensors` is downloaded instead of a whole multi-format repo.
+- **A Civitai id may be a model or a version id** — it resolves to the right
+  download version either way.
+- **A LoRA used before can be re-attached by name alone**; source and ref come
+  from the agent's memory.
+
 ## Tools
 
 Templates: `vast_list_templates`, `vast_get_template`, `vast_create_template`,
@@ -114,7 +138,21 @@ Instances: `vast_list_instances`, `vast_get_instance`, `vast_destroy_instance`.
 Model search: `huggingface_search_models`, `huggingface_get_model_info`,
 `civitai_search_models`, `civitai_get_model_info`, `civitai_get_model_version`.
 
-Misc: `vast_whoami`, `vast_agent_memory`.
+Misc: `vast_whoami`, `vast_agent_memory`, `vast_check_account_env_vars`
+(names only — a download command that needs `CIVITAI_API_TOKEN` on the
+instance can be checked before it fails there).
+
+## Tests
+
+```bash
+npm test
+```
+
+Runs the tool handlers end to end against a mock Vast.ai API
+(`test/mockVast.js`), covering name resolution, LoRA add/remove/weight, base
+model swaps, env-var surgery, the confirm gate, and that a destroy which
+leaves the instance alive is reported as a failure. No real account is
+touched.
 
 ## Persistence
 
