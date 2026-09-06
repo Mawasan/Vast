@@ -94,7 +94,12 @@ export async function ensureAnimaRuntime(templateRef: string): Promise<RuntimeRe
   const missing = required.filter((requiredResource) => !resources.some((resource) =>
     resource.role === requiredResource.role || resource.filename === requiredResource.filename
   ));
-  if (missing.length === 0) return { template, resources, updated: false };
+  if (missing.length === 0) {
+    const repairedOnstart = injectManagedBlock(template.onstart, resources);
+    if (repairedOnstart === (template.onstart ?? "")) return { template, resources, updated: false };
+    const updatedTemplate = await updateTemplate(template.hash_id as string, { onstart: repairedOnstart });
+    return { template: updatedTemplate, resources, updated: true };
+  }
 
   const updatedTemplate = await writeModels(template, [...resources, ...missing]);
   return { template: updatedTemplate, resources: [...resources, ...missing], updated: true };

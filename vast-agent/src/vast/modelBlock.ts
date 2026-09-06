@@ -88,10 +88,39 @@ export function injectManagedBlock(onstart: string | undefined | null, resources
   const source = onstart ?? "";
   const start = source.indexOf(START_MARKER);
   const end = source.indexOf(END_MARKER);
-  if (start === -1 || end === -1) {
-    const custom = source.trim();
-    return custom ? `${block}\n\n${custom}\n` : `${block}\n`;
+  const heredocDeclaration = "cat > /tmp/akira-models.sh <<'AKIRA_PROVISION'";
+  const heredocStart = source.indexOf(heredocDeclaration);
+  const heredocEnd = heredocStart === -1 ? -1 : source.indexOf("\nAKIRA_PROVISION", heredocStart);
+
+  if (start !== -1 && end !== -1) {
+    const afterMarker = end + END_MARKER.length;
+    if (heredocStart === -1 || heredocEnd === -1 || (start > heredocStart && afterMarker < heredocEnd)) {
+      // Preserve the block's semantic location. In Vast's Comfy image it is
+      // deliberately inside PROVISIONING_SCRIPT's heredoc; moving it above
+      // entrypoint.sh downloads files too early and leaves ComfyUI uninstalled.
+      return `${source.slice(0, start)}${block}${source.slice(afterMarker)}`;
+    }
+
+    // Repair templates damaged by the previous prepend behavior: remove the
+    // outer block, then put it back inside the provisioning heredoc.
+    const withoutBlock = `${source.slice(0, start)}${source.slice(afterMarker)}`;
+    const repairedHeredocStart = withoutBlock.indexOf(heredocDeclaration);
+    const repairedHeredocEnd = withoutBlock.indexOf("\nAKIRA_PROVISION", repairedHeredocStart);
+    const strictLine = withoutBlock.indexOf("set -euo pipefail", repairedHeredocStart);
+    const insertionPoint = strictLine !== -1 && strictLine < repairedHeredocEnd
+      ? withoutBlock.indexOf("\n", strictLine) + 1
+      : withoutBlock.indexOf("\n", repairedHeredocStart) + 1;
+    return `${withoutBlock.slice(0, insertionPoint)}${block}\n${withoutBlock.slice(insertionPoint)}`;
   }
-  const custom = `${source.slice(0, start)}${source.slice(end + END_MARKER.length)}`.trim();
+
+  if (heredocStart !== -1 && heredocEnd !== -1) {
+    const strictLine = source.indexOf("set -euo pipefail", heredocStart);
+    const insertionPoint = strictLine !== -1 && strictLine < heredocEnd
+      ? source.indexOf("\n", strictLine) + 1
+      : source.indexOf("\n", heredocStart) + 1;
+    return `${source.slice(0, insertionPoint)}${block}\n${source.slice(insertionPoint)}`;
+  }
+
+  const custom = source.trim();
   return custom ? `${block}\n\n${custom}\n` : `${block}\n`;
 }
