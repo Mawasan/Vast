@@ -16,8 +16,8 @@ function downloadCommand(resource: ModelResource): string {
   const curlDownload = (url: string, output: string, supportsCivitaiToken = false) => {
     if (!supportsCivitaiToken) return `curl -fL -C - -o "${output}" "${url}"`;
     return (
-      `if [ -n "\${CIVITAI_API_TOKEN:-}" ]; then ` +
-      `curl -fL -C - -H "Authorization: Bearer $CIVITAI_API_TOKEN" -o "${output}" "${url}"; ` +
+      `CIVITAI_DOWNLOAD_TOKEN="\${CIVITAI_API_TOKEN:-\${CIVIT:-}}"; if [ -n "$CIVITAI_DOWNLOAD_TOKEN" ]; then ` +
+      `curl -fL -C - -H "Authorization: Bearer $CIVITAI_DOWNLOAD_TOKEN" -o "${output}" "${url}"; ` +
       `else curl -fL -C - -o "${output}" "${url}"; fi`
     );
   };

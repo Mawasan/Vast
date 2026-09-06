@@ -154,9 +154,11 @@ Template editing: `vast_list_template_models`, `vast_set_template_base_model`,
 
 Instances: `vast_list_instances`, `vast_get_instance`, `vast_destroy_instance`.
 
-Serverless inference: `vast_generate_image`, `vast_generate_anima_image`,
-`vast_get_job`. The Anima tool builds the required UNET/text-encoder/VAE graph
-and applies every LoRA attached to the selected template in order.
+Serverless inference: `vast_list_endpoints`, `vast_list_workergroups`,
+`vast_prepare_template_endpoint`, `vast_generate_image`,
+`vast_generate_anima_image`, `vast_generate_template_image`, `vast_get_job`.
+The template tool detects Anima versus SDXL/Illustrious, builds the correct
+graph, and applies every LoRA attached to the selected template in order.
 
 Model search: `huggingface_search_models`, `huggingface_get_model_info`,
 `civitai_search_models`, `civitai_get_model_info`, `civitai_get_model_version`.

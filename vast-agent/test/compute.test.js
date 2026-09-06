@@ -12,6 +12,7 @@ process.env.VAST_AGENT_DATA_DIR = await mkdtemp(join(tmpdir(), 'vast-compute-'))
 const { computeTools } = await import('../dist/tools/compute.js');
 const { submitJob, getJob } = await import('../dist/core/jobs.js');
 const { runInference, workerUrl } = await import('../dist/vast/inference.js');
+const { prepareTemplateEndpoint } = await import('../dist/vast/serverless.js');
 const { vastClient } = await import('../dist/core/vastClient.js');
 const { createHttpApp } = await import('../dist/http/server.js');
 const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
@@ -26,6 +27,8 @@ test('paid operations preview without network or creating jobs', async t => {
   t.mock.method(globalThis, 'fetch', () => { throw new Error('unexpected request'); });
   assert.equal((await call('vast_rent_instance',{requestId:'preview',offerId:1,template:'x',diskGb:40,maxHourlyUsd:1})).status,'confirmation_required');
   assert.equal((await call('vast_generate_image',{requestId:'preview-image',endpoint:'x',workflow:{'1':{class_type:'SaveImage',inputs:{}}}})).status,'confirmation_required');
+  assert.equal((await call('vast_generate_template_image',{requestId:'preview-template-image',endpoint:'x',template:'AKIRA',prompt:'test'})).status,'confirmation_required');
+  assert.equal((await call('vast_prepare_template_endpoint',{template:'AKIRA'})).status,'confirmation_required');
   assert.equal((await call('vast_start_instance',{id:1})).status,'confirmation_required');
 });
 test('offer search unwraps repeated filters objects before calling Vast', async t => {
@@ -90,6 +93,26 @@ test('start/stop distinguish accepted transition from reached state and preserve
   });
   assert.equal((await call('vast_start_instance',{id:9,confirm:true})).reached,false); assert.equal(requested,'running');
   state='running'; assert.equal((await call('vast_stop_instance',{id:9,confirm:true})).reached,false); assert.equal(requested,'stopped'); assert.equal(deletes,0);
+});
+test('prepares one scale-to-zero endpoint and workergroup for a template', async t => {
+  const writes=[];
+  t.mock.method(globalThis,'fetch',async (url,opts={})=>{
+    const path=new URL(url).pathname;
+    if(path.endsWith('/users/current/')) return json({id:42});
+    if(path.endsWith('/template/')) return json({templates:[{id:77,hash_id:'hash-akira',name:'AKIRA - Test',creator_id:42,image:'vastai/comfy'}]});
+    if(path.endsWith('/endptjobs') || (path.endsWith('/endptjobs/') && opts.method==='GET')) return json({success:true,results:[]});
+    if(path.endsWith('/workergroups/') && opts.method==='GET') return json({success:true,results:[]});
+    if(path.endsWith('/endptjobs/') && opts.method==='POST') { writes.push(JSON.parse(opts.body)); return json({success:true,result:501}); }
+    if(path.endsWith('/workergroups/') && opts.method==='POST') { writes.push(JSON.parse(opts.body)); return json({success:true,id:601}); }
+    throw new Error(`unexpected path ${path} ${opts.method}`);
+  });
+  const result=await prepareTemplateEndpoint('AKIRA - Test');
+  assert.equal(result.created,true);
+  assert.equal(result.endpoint.id,501);
+  assert.equal(result.workergroup.id,601);
+  assert.equal(writes[0].cold_workers,0);
+  assert.equal(writes[0].max_workers,1);
+  assert.equal(writes[1].template_hash,'hash-akira');
 });
 test('image request routes auth_data separately and preserves complete workflow', async t => {
   let sends=0;

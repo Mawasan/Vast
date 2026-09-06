@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 const { buildAnimaApiWorkflow } = await import("../dist/comfyui/anima.js");
+const { buildSdxlApiWorkflow } = await import("../dist/comfyui/sdxl.js");
 
 const base = {
   name: "One Obsession v4",
@@ -34,4 +35,19 @@ test("Anima workflow rejects an SDXL checkpoint template", () => {
     () => buildAnimaApiWorkflow([{ ...base, targetPath: "/workspace/ComfyUI/models/checkpoints" }], { prompt: "test" }),
     /not an Anima template/
   );
+});
+
+test("SDXL workflow chains model and CLIP through every LoRA", () => {
+  const workflow = buildSdxlApiWorkflow([
+    { ...base, role: "base", filename: "illustrious.safetensors", targetPath: "/workspace/ComfyUI/models/checkpoints" },
+    { ...base, name: "style", role: "lora", filename: "style.safetensors", targetPath: "/workspace/ComfyUI/models/loras", weight: 0.6 },
+  ], { prompt: "1girl", seed: 7 });
+  assert.equal(workflow["1"].class_type, "CheckpointLoaderSimple");
+  assert.equal(workflow["2"].class_type, "LoraLoader");
+  assert.deepEqual(workflow["2"].inputs.model, ["1", 0]);
+  assert.deepEqual(workflow["2"].inputs.clip, ["1", 1]);
+  const encoders = Object.values(workflow).filter((node) => node.class_type === "CLIPTextEncode");
+  assert.ok(encoders.every((node) => JSON.stringify(node.inputs.clip) === JSON.stringify(["2", 1])));
+  const sampler = Object.values(workflow).find((node) => node.class_type === "KSampler");
+  assert.deepEqual(sampler.inputs.model, ["2", 0]);
 });

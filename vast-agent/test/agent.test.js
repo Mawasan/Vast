@@ -190,7 +190,8 @@ describe("base model swap", () => {
     });
     const script = currentTemplate("hash-illustrious").onstart;
     assert.match(script, /CIVITAI_API_TOKEN/);
-    assert.match(script, /Authorization: Bearer \$CIVITAI_API_TOKEN/);
+    assert.match(script, /CIVITAI_DOWNLOAD_TOKEN="\$\{CIVITAI_API_TOKEN:-\$\{CIVIT:-\}\}"/);
+    assert.match(script, /Authorization: Bearer \$CIVITAI_DOWNLOAD_TOKEN/);
     assert.match(script, /fileId=3169463/);
   });
 });

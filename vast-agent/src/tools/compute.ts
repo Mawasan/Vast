@@ -3,9 +3,10 @@ import type { ToolDef } from "./registry.js";
 import { getJob, submitJob } from "../core/jobs.js";
 import { searchOffers, rentInstance, setInstanceState } from "../vast/lifecycle.js";
 import { runInference } from "../vast/inference.js";
-import { vastClient } from "../core/vastClient.js";
 import { listModelsInTemplate } from "../vast/templateEdit.js";
 import { buildAnimaApiWorkflow } from "../comfyui/anima.js";
+import { buildSdxlApiWorkflow } from "../comfyui/sdxl.js";
+import { listEndpoints, listWorkergroups, prepareTemplateEndpoint } from "../vast/serverless.js";
 
 function def<S extends z.ZodRawShape>(tool: ToolDef<S>): ToolDef { return tool as unknown as ToolDef; }
 const requestId = z.string().min(1).max(160).describe("Unique operation ID. Reuse exactly this ID and arguments after a disconnect to avoid duplicate billing.");
@@ -28,11 +29,13 @@ export const computeTools: ToolDef[] = [
     inputShape: { id: z.number().int().positive(), confirm },
     handler: async ({ id, confirm }) => confirm ? setInstanceState(id, state) : preview(state, { id }),
   })),
-  def({ name: "vast_list_endpoints", description: "List configured Vast Serverless endpoints to find the name required for inference. Omits endpoint credentials.", inputShape: {}, handler: async () => {
-    const response = await vastClient.get("/endptjobs") as { results?: Record<string, unknown>[]; success?: boolean };
-    if (response.success === false || !Array.isArray(response.results)) throw new Error("Could not list serverless endpoints.");
-    return response.results.map(({ id, endpoint_name, endpoint_state, max_workers, cold_workers }) => ({ id, endpoint_name, endpoint_state, max_workers, cold_workers }));
-  } }),
+  def({ name: "vast_list_endpoints", description: "List configured Vast Serverless endpoints to find the name required for inference. Omits endpoint credentials.", inputShape: {}, handler: async () => listEndpoints() }),
+  def({ name: "vast_list_workergroups", description: "List Vast Serverless workergroups and their endpoint/template mapping. Omits endpoint credentials and launch secrets.", inputShape: {}, handler: async () => listWorkergroups() }),
+  def({ name: "vast_prepare_template_endpoint", description: "Create a scale-to-zero Vast Serverless endpoint and workergroup for an existing image template, or reuse its existing workergroup. A test worker may start and incur GPU cost. Requires confirm:true.",
+    inputShape: { template: z.string().min(1), endpointName: z.string().optional(), confirm },
+    handler: async ({ template, endpointName, confirm }) => confirm
+      ? prepareTemplateEndpoint(template, endpointName)
+      : preview("prepare_template_endpoint", { template, endpointName: endpointName || "automatic", maxWorkers: 1, coldWorkers: 0, testWorkers: 1 }) }),
   def({ name: "vast_serverless_request", description: "Run text, image, audio, or video inference on an existing Vast Serverless endpoint using its native payload. Returns a durable job ID immediately; poll vast_get_job. Can trigger autoscaling and costs. No API keys needed in arguments. Does not create/configure endpoints.",
     inputShape: { ...inferenceShape, path: z.enum(["/generate/sync", "/generate", "/v1/chat/completions", "/v1/completions", "/v1/audio/speech", "/v1/images/generations"]), payload: z.record(z.string(), z.unknown()) },
     handler: async ({ requestId, confirm, ...input }) => confirm ? submitJob(requestId, "inference", input, () => runInference(input)) : preview("inference", { endpoint: input.endpoint, path: input.path }) }),
@@ -62,6 +65,34 @@ export const computeTools: ToolDef[] = [
       return submitJob(requestId, "anima_image", operation, async () => {
         const resources = await listModelsInTemplate(template);
         const workflow = buildAnimaApiWorkflow(resources, { prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed });
+        return runInference({ ...input, path: "/generate/sync", payload: { input: { request_id: requestId, workflow_json: workflow } } });
+      });
+    } }),
+  def({ name: "vast_generate_template_image", description: "Generate an image from any AKIRA Anima or SDXL/Illustrious template on its matching Vast Serverless endpoint. Builds the family-correct workflow and applies all template LoRAs in order. Returns a durable job; poll vast_get_job.",
+    inputShape: {
+      ...inferenceShape,
+      template: z.string().min(1),
+      prompt: z.string().min(1),
+      negativePrompt: z.string().optional(),
+      width: z.number().int().min(512).max(2048).multipleOf(64).optional(),
+      height: z.number().int().min(512).max(2048).multipleOf(64).optional(),
+      steps: z.number().int().min(1).max(100).optional(),
+      cfg: z.number().finite().min(0).max(30).optional(),
+      samplerName: z.string().optional(),
+      scheduler: z.string().optional(),
+      seed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    },
+    handler: async ({ requestId, confirm, template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, ...input }) => {
+      const operation = { template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, ...input };
+      if (!confirm) return preview("template_image_generation", { endpoint: input.endpoint, template, width: width ?? "family default", height: height ?? "family default" });
+      return submitJob(requestId, "template_image", operation, async () => {
+        const resources = await listModelsInTemplate(template);
+        const base = resources.find((resource) => resource.role === "base");
+        if (!base) throw new Error("The selected template has no attached base model.");
+        const options = { prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed };
+        const workflow = base.targetPath.replace(/\\/g, "/").includes("/diffusion_models")
+          ? buildAnimaApiWorkflow(resources, options)
+          : buildSdxlApiWorkflow(resources, options);
         return runInference({ ...input, path: "/generate/sync", payload: { input: { request_id: requestId, workflow_json: workflow } } });
       });
     } }),

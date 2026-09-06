@@ -237,7 +237,8 @@ export const tools: ToolDef[] = [
       return {
         names,
         hfTokenPresent: names.includes("HF_TOKEN"),
-        civitaiTokenPresent: names.includes("CIVITAI_API_TOKEN"),
+        civitaiTokenPresent: names.includes("CIVITAI_API_TOKEN") || names.includes("CIVIT"),
+        civitaiTokenVariable: names.includes("CIVITAI_API_TOKEN") ? "CIVITAI_API_TOKEN" : names.includes("CIVIT") ? "CIVIT" : null,
       };
     },
   }),
