@@ -254,3 +254,45 @@ test('a workergroup query stored as an object without bandwidth is repaired', as
   await prepareTemplateEndpoint('hash-akira');
   assert.match(updated.search_params,/inet_down>=1000/);
 });
+test('a Civitai redirect to the CDN counts as downloadable, not as a failure', async t => {
+  process.env.CIVITAI_API_TOKEN='test-civitai-token';
+  const seen=[];
+  t.mock.method(globalThis,'fetch',async (url,opts={})=>{
+    const u=new URL(url);
+    if(u.hostname==='civitai.com' && u.pathname.startsWith('/api/download/')){
+      seen.push(opts.redirect);
+      return new Response(null,{status:307,headers:{location:'https://cdn.example/x'}});
+    }
+    const path=u.pathname;
+    if(path.endsWith('/users/current/')) return json({id:42});
+    if(path.endsWith('/template/')) return json({templates:[{id:79,hash_id:'hash-civitai',name:'AKIRA - Civitai',creator_id:42,image:'vastai/comfy',
+      onstart:`# >>> vast-agent:models >>>\n# vast-agent:models:json=${JSON.stringify([{name:'Base',role:'base',source:'civitai',ref:'123',targetPath:'/workspace/ComfyUI/models/checkpoints',filename:'b.safetensors',url:'https://civitai.com/api/download/models/123'}])}\n# <<< vast-agent:models <<<`}]});
+    if(path.endsWith('/endptjobs')) return json({results:[{id:503,endpoint_name:'akira-civitai',endpoint_state:'active'}]});
+    if(path.endsWith('/workergroups/') && opts.method==='GET') return json({results:[{id:603,endpoint_id:503,endpoint_name:'akira-civitai',template_id:79,template_hash:'hash-civitai',
+      search_query:{num_gpus:{eq:'1'},inet_down:{gte:1000}}}]});
+    // Regenerating the managed block replaces the workergroup; not what this
+    // test is about, so just let those calls through.
+    if(path.endsWith('/template/') && opts.method==='PUT') return json({template:{id:79,hash_id:'hash-civitai'}});
+    if(path.endsWith('/workergroups/603/') && opts.method==='DELETE') return json({success:true});
+    if(path.endsWith('/workergroups/') && opts.method==='POST') return json({success:true,id:604});
+    throw new Error(`unexpected path ${path} ${opts.method}`);
+  });
+  const result=await prepareTemplateEndpoint('hash-civitai');
+  assert.ok(result.templateHash,'a 307 from Civitai must not block provisioning');
+  assert.equal(seen[0],'manual','the bearer token must not be carried to the CDN');
+});
+test('a paid early-access model is named as such, not blamed on a missing token', async t => {
+  process.env.CIVITAI_API_TOKEN='test-civitai-token';
+  t.mock.method(globalThis,'fetch',async (url,opts={})=>{
+    const u=new URL(url);
+    if(u.hostname==='civitai.com' && u.pathname.startsWith('/api/download/')) return new Response(null,{status:403});
+    if(u.hostname==='civitai.com' && u.pathname.startsWith('/api/v1/model-versions/'))
+      return json({paidAccess:{permanent:false,endsAt:'2026-09-21T13:40:30.095Z'}});
+    const path=u.pathname;
+    if(path.endsWith('/users/current/')) return json({id:42});
+    if(path.endsWith('/template/')) return json({templates:[{id:80,hash_id:'hash-paid',name:'AKIRA - Paid',creator_id:42,image:'vastai/comfy',
+      onstart:`# >>> vast-agent:models >>>\n# vast-agent:models:json=${JSON.stringify([{name:'EA base',role:'base',source:'civitai',ref:'999',targetPath:'/workspace/ComfyUI/models/checkpoints',filename:'ea.safetensors',url:'https://civitai.com/api/download/models/999'}])}\n# <<< vast-agent:models <<<`}]});
+    throw new Error(`unexpected path ${path} ${opts.method}`);
+  });
+  await assert.rejects(()=>prepareTemplateEndpoint('hash-paid'),/early access until 2026-09-21/);
+});
