@@ -2,6 +2,7 @@ import { z } from "zod";
 import * as templates from "../vast/templates.js";
 import * as instances from "../vast/instances.js";
 import * as templateEdit from "../vast/templateEdit.js";
+import { findUnreachableResources } from "../vast/resourceCheck.js";
 import * as hf from "../sources/huggingface.js";
 import * as civitai from "../sources/civitai.js";
 import * as comfy from "../comfyui/workflow.js";
@@ -179,6 +180,23 @@ export const tools: ToolDef[] = [
     description: "List the base model and LoRAs currently attached to a template's managed download block.",
     inputShape: { template: templateRef },
     handler: async ({ template }) => templateEdit.listModelsInTemplate(template),
+  }),
+
+  def({
+    name: "vast_check_template_downloads",
+    description:
+      "Check that every model and LoRA a template downloads is actually reachable, using the agent's Civitai token. Free and read-only: it starts no worker. A worker whose downloads fail still boots and only fails once the paid GPU serves a request, so run this before preparing an endpoint.",
+    inputShape: { template: templateRef },
+    handler: async ({ template }) => {
+      const resources = await templateEdit.listModelsInTemplate(template);
+      const unreachable = await findUnreachableResources(resources);
+      return {
+        template,
+        checked: resources.length,
+        ready: unreachable.length === 0,
+        unreachable,
+      };
+    },
   }),
 
   def({

@@ -86,7 +86,7 @@ test('OAuth discovery, DCR, PKCE, refresh, and protected REST access work end to
       requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } },
     }));
     const mcpTools = await mcpClient.listTools();
-    assert.equal(mcpTools.tools.length, 42);
+    assert.equal(mcpTools.tools.length, 43);
     assert.equal(mcpTools.tools.find(tool => tool.name === 'vast_destroy_instance').annotations.destructiveHint, true);
     await mcpClient.close();
 
