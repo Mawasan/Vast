@@ -190,9 +190,10 @@ describe("base model swap", () => {
     });
     const script = currentTemplate("hash-illustrious").onstart;
     assert.match(script, /CIVITAI_API_TOKEN/);
-    assert.match(script, /CIVITAI_DOWNLOAD_TOKEN="\$\{CIVITAI_API_TOKEN:-\$\{CIVIT:-\}\}"/);
-    assert.match(script, /Authorization: Bearer \$CIVITAI_DOWNLOAD_TOKEN/);
+    assert.match(script, /\$\{CIVITAI_API_TOKEN:-\$\{CIVITAI_TOKEN:-\$\{CIVIT:-\}\}\}/);
+    assert.match(script, /Authorization: Bearer \$akira_token/);
     assert.match(script, /fileId=3169463/);
+    assert.match(script, /akira_fetch 'kodoranime' .* civitai;/, "a Civitai URL is fetched with the token path");
   });
 });
 

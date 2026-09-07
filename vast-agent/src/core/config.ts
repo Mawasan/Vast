@@ -79,7 +79,9 @@ export const config = {
   accessToken: env("VAST_AGENT_ACCESS_TOKEN"),
   vastUrl: env("VAST_URL", "https://console.vast.ai") as string,
   hfToken: env("HF_TOKEN"),
-  civitaiToken: env("CIVITAI_API_TOKEN"),
+  // CIVITAI_TOKEN is Vast's own name for it and CIVIT is what this account
+  // uses; accept all three so the agent and its workers read the same token.
+  civitaiToken: env("CIVITAI_API_TOKEN") ?? env("CIVITAI_TOKEN") ?? env("CIVIT"),
   port: Number(env("PORT", "8080")),
   dataDir: env("VAST_AGENT_DATA_DIR", "./data") as string,
   transport: (env("VAST_AGENT_TRANSPORT", "http") as string).toLowerCase(),

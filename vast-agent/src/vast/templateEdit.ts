@@ -68,10 +68,9 @@ export async function ensureAnimaRuntime(templateRef: string): Promise<RuntimeRe
   const resources = parseManagedModels(template.onstart);
   const base = resources.find((resource) => resource.role === "base");
   const isAnima = Boolean(base?.targetPath.replace(/\\/g, "/").includes("/diffusion_models"));
-  if (!isAnima) return { template, resources, updated: false };
 
   const comfyDir = parseDockerEnv(template.env).envVars.COMFYUI_DIR ?? "/workspace/ComfyUI";
-  const required: ModelResource[] = [
+  const required: ModelResource[] = !isAnima ? [] : [
     {
       name: "Anima Qwen text encoder",
       role: "text_encoder",
@@ -94,15 +93,19 @@ export async function ensureAnimaRuntime(templateRef: string): Promise<RuntimeRe
   const missing = required.filter((requiredResource) => !resources.some((resource) =>
     resource.role === requiredResource.role || resource.filename === requiredResource.filename
   ));
-  if (missing.length === 0) {
-    const repairedOnstart = injectManagedBlock(template.onstart, resources);
-    if (repairedOnstart === (template.onstart ?? "")) return { template, resources, updated: false };
-    const updatedTemplate = await updateTemplate(template.hash_id as string, { onstart: repairedOnstart });
-    return { template: updatedTemplate, resources, updated: true };
-  }
+  const wanted = [...resources, ...missing];
+  // Templates that manage no downloads have nothing to regenerate, and
+  // writing an empty block into them would needlessly recreate a workergroup.
+  if (wanted.length === 0) return { template, resources: wanted, updated: false };
 
-  const updatedTemplate = await writeModels(template, [...resources, ...missing]);
-  return { template: updatedTemplate, resources: [...resources, ...missing], updated: true };
+  // Regenerate the block for every template, not just Anima ones: the
+  // download commands themselves change when this agent is updated, and a
+  // template still carrying an older, abort-on-first-failure block would
+  // keep producing workers with empty model directories.
+  const nextOnstart = injectManagedBlock(template.onstart, wanted);
+  if (nextOnstart === (template.onstart ?? "")) return { template, resources: wanted, updated: false };
+  const updatedTemplate = await updateTemplate(template.hash_id as string, { onstart: nextOnstart });
+  return { template: updatedTemplate, resources: wanted, updated: true };
 }
 
 export interface ResourceRequest {
@@ -177,7 +180,10 @@ async function resolveResource(
       const file = pickPrimaryCivitaiFile(version);
       filename ??= file?.name;
       name ??= version.name;
-      url = `https://civitai.com/api/download/models/${version.id}`;
+      // A version can hold several files — the Anima checkpoint ships its own
+      // VAE and text encoder next to the diffusion model — so pin the file id
+      // of the one that was picked instead of letting Civitai choose.
+      url = file?.downloadUrl ?? `https://civitai.com/api/download/models/${version.id}`;
     } catch {
       // Same best-effort fallback as above.
     }

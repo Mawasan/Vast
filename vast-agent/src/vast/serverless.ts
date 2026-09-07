@@ -1,5 +1,6 @@
 import { vastClient } from "../core/vastClient.js";
 import { ensureAnimaRuntime } from "./templateEdit.js";
+import { describeUnreachable, findUnreachableResources } from "./resourceCheck.js";
 
 export type EndpointSummary = {
   id: number;
@@ -90,6 +91,10 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
   const readiness = await ensureAnimaRuntime(templateRef);
   const template = readiness.template;
   if (!template.hash_id || typeof template.id !== "number") throw new Error("The selected template has no usable Vast id/hash.");
+  // Checked before any workergroup exists: a worker whose downloads 401 boots
+  // regardless and only fails once the paid GPU serves a request.
+  const unreachable = await findUnreachableResources(readiness.resources);
+  if (unreachable.length > 0) throw new Error(describeUnreachable(template.name ?? templateRef, unreachable));
   const [endpoints, workergroups] = await Promise.all([listEndpoints(), listWorkergroups()]);
   let existingGroup = workergroups.find((group) => group.templateHash === template.hash_id || group.templateId === template.id);
   let endpointToReuse = existingGroup
