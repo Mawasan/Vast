@@ -224,3 +224,33 @@ test('REST schemas and MCP expose the same tools, with protected execution and p
     const preview=await client.callTool({name:'vast_stop_instance',arguments:{id:9}}); assert.match(preview.content[0].text,/confirmation_required/);
   } finally { await client.close(); await new Promise(r=>server.close(r)); }
 });
+test('a workergroup query Vast stored as an object is recognised, not rewritten every time', async t => {
+  let puts=0;
+  t.mock.method(globalThis,'fetch',async (url,opts={})=>{
+    const path=new URL(url).pathname;
+    if(path.endsWith('/users/current/')) return json({id:42});
+    if(path.endsWith('/template/')) return json({templates:[{id:77,hash_id:'hash-akira',name:'AKIRA - Test',creator_id:42,image:'vastai/comfy'}]});
+    if(path.endsWith('/endptjobs')) return json({results:[{id:501,endpoint_name:'akira-test',endpoint_state:'active'}]});
+    if(path.endsWith('/workergroups/') && opts.method==='GET') return json({results:[{id:601,endpoint_id:501,endpoint_name:'akira-test',template_id:77,template_hash:'hash-akira',
+      search_query:{num_gpus:{eq:'1'},inet_down:{gte:1000},verified:{eq:true}}}]});
+    if(path.endsWith('/workergroups/601/') && opts.method==='PUT') { puts++; return json({success:true}); }
+    throw new Error(`unexpected path ${path} ${opts.method}`);
+  });
+  await prepareTemplateEndpoint('hash-akira');
+  assert.equal(puts,0,'an up-to-date workergroup must not be rewritten');
+});
+test('a workergroup query stored as an object without bandwidth is repaired', async t => {
+  let updated;
+  t.mock.method(globalThis,'fetch',async (url,opts={})=>{
+    const path=new URL(url).pathname;
+    if(path.endsWith('/users/current/')) return json({id:42});
+    if(path.endsWith('/template/')) return json({templates:[{id:77,hash_id:'hash-akira',name:'AKIRA - Test',creator_id:42,image:'vastai/comfy'}]});
+    if(path.endsWith('/endptjobs')) return json({results:[{id:501,endpoint_name:'akira-test',endpoint_state:'active'}]});
+    if(path.endsWith('/workergroups/') && opts.method==='GET') return json({results:[{id:601,endpoint_id:501,endpoint_name:'akira-test',template_id:77,template_hash:'hash-akira',
+      search_query:{num_gpus:{eq:'1'},verified:{eq:true}}}]});
+    if(path.endsWith('/workergroups/601/') && opts.method==='PUT') { updated=JSON.parse(opts.body); return json({success:true}); }
+    throw new Error(`unexpected path ${path} ${opts.method}`);
+  });
+  await prepareTemplateEndpoint('hash-akira');
+  assert.match(updated.search_params,/inet_down>=1000/);
+});

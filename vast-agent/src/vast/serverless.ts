@@ -75,11 +75,26 @@ export async function listWorkergroups(): Promise<WorkergroupSummary[]> {
  * Whether a stored workergroup query still matches what this agent asks for.
  * Both parts matter: one GPU per image worker, and a host fast enough to
  * finish provisioning before the autoscaler gives up on it.
+ *
+ * Vast accepts `search_params` as a CLI-style string but reads it back
+ * parsed and merged with the template's extra_filters, so the stored value
+ * is normally an object ({"num_gpus":{"eq":"1"}}). Both shapes are checked;
+ * anything else counts as out of date and gets rewritten.
  */
 function hasCurrentWorkerFilters(value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  return /(?:^|\s)num_gpus\s*(?:=|==)\s*1(?:\s|$)/.test(value)
-    && /(?:^|\s)inet_down\s*>=?\s*\d+/.test(value);
+  if (typeof value === "string") {
+    return /(?:^|\s)num_gpus\s*(?:=|==)\s*1(?:\s|$)/.test(value)
+      && /(?:^|\s)inet_down\s*>=?\s*\d+/.test(value);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const query = value as Record<string, unknown>;
+  const clause = (key: string): Record<string, unknown> | null => {
+    const raw = query[key];
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+  };
+  const singleGpu = Number(clause("num_gpus")?.eq) === 1;
+  const bandwidth = Number(clause("inet_down")?.gte) >= 1000;
+  return singleGpu && bandwidth;
 }
 
 async function ensureWorkerFilters(group: WorkergroupSummary, template: { id: number; hash_id: string }) {
