@@ -17,6 +17,8 @@ export type WorkergroupSummary = {
   templateId: number | null;
   templateHash: string | null;
   gpuRam: number | null;
+  coldWorkers: number | null;
+  testWorkers: number | null;
   searchQuery: unknown;
 };
 
@@ -66,6 +68,8 @@ export async function listWorkergroups(): Promise<WorkergroupSummary[]> {
       templateId: typeof row.template_id === "number" ? row.template_id : null,
       templateHash: typeof row.template_hash === "string" ? row.template_hash : null,
       gpuRam: typeof row.gpu_ram === "number" ? row.gpu_ram : null,
+      coldWorkers: typeof row.cold_workers === "number" ? row.cold_workers : null,
+      testWorkers: typeof row.test_workers === "number" ? row.test_workers : null,
       searchQuery: row.search_query ?? row.search_params ?? null,
     }];
   });
@@ -97,8 +101,11 @@ function hasCurrentWorkerFilters(value: unknown): boolean {
   return singleGpu && bandwidth;
 }
 
-async function ensureWorkerFilters(group: WorkergroupSummary, template: { id: number; hash_id: string }) {
-  if (hasCurrentWorkerFilters(group.searchQuery)) return group;
+async function ensureWorkerConfiguration(group: WorkergroupSummary, template: { id: number; hash_id: string }) {
+  // Keep one stopped ("cold") worker after initial provisioning. Its disk
+  // retains the downloaded models, avoiding a multi-gigabyte download on
+  // every scale-up while still avoiding idle GPU charges.
+  if (hasCurrentWorkerFilters(group.searchQuery) && group.coldWorkers === 1) return group;
   await vastClient.putOnce(`/workergroups/${group.id}/`, {
     template_hash: template.hash_id,
     template_id: template.id,
@@ -106,9 +113,10 @@ async function ensureWorkerFilters(group: WorkergroupSummary, template: { id: nu
     endpoint_name: group.endpointName,
     search_params: WORKER_SEARCH,
     gpu_ram: 24,
+    cold_workers: 1,
     test_workers: 1,
   });
-  return { ...group, searchQuery: WORKER_SEARCH };
+  return { ...group, searchQuery: WORKER_SEARCH, coldWorkers: 1, testWorkers: 1 };
 }
 
 async function ensureEndpointActive(endpoint: EndpointSummary): Promise<EndpointSummary> {
@@ -152,7 +160,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
     let endpoint = endpoints.find((item) => item.id === currentGroup.endpointId || item.endpointName === currentGroup.endpointName);
     if (!endpoint) throw new Error("A workergroup exists for this template, but its endpoint could not be found.");
     endpoint = await ensureEndpointActive(endpoint);
-    existingGroup = await ensureWorkerFilters(currentGroup, template as { id: number; hash_id: string });
+    existingGroup = await ensureWorkerConfiguration(currentGroup, template as { id: number; hash_id: string });
     return { created: false, template: template.name, templateHash: template.hash_id, endpoint, workergroup: existingGroup };
   }
 
@@ -166,12 +174,12 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
       min_load: 0,
       target_util: 0.9,
       cold_mult: 1,
-      cold_workers: 0,
+      cold_workers: 1,
       max_workers: 1,
     }) as Record<string, unknown>;
     const id = typeof response.result === "number" ? response.result : typeof response.id === "number" ? response.id : null;
     if (id === null) throw new Error("Vast created no usable endpoint id.");
-    endpoint = { id, endpointName, state: "active", maxWorkers: 1, coldWorkers: 0 };
+    endpoint = { id, endpointName, state: "active", maxWorkers: 1, coldWorkers: 1 };
     createdEndpoint = true;
   } else {
     endpoint = await ensureEndpointActive(endpoint);
@@ -187,7 +195,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
       min_load: 0,
       target_util: 0.9,
       cold_mult: 1,
-      cold_workers: 0,
+      cold_workers: 1,
       max_workers: 1,
       test_workers: 1,
       gpu_ram: 24,
@@ -200,7 +208,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
       template: template.name,
       templateHash: template.hash_id,
       endpoint,
-      workergroup: { id, endpointId: endpoint.id, endpointName: endpoint.endpointName, templateId: template.id, templateHash: template.hash_id, gpuRam: 24, searchQuery: WORKER_SEARCH },
+      workergroup: { id, endpointId: endpoint.id, endpointName: endpoint.endpointName, templateId: template.id, templateHash: template.hash_id, gpuRam: 24, coldWorkers: 1, testWorkers: 1, searchQuery: WORKER_SEARCH },
     };
   } catch (error) {
     if (createdEndpoint) {
