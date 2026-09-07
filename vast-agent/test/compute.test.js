@@ -13,6 +13,7 @@ const { computeTools } = await import('../dist/tools/compute.js');
 const { submitJob, getJob } = await import('../dist/core/jobs.js');
 const { runInference, workerUrl } = await import('../dist/vast/inference.js');
 const { prepareTemplateEndpoint } = await import('../dist/vast/serverless.js');
+const { buildManagedBlock } = await import('../dist/vast/modelBlock.js');
 const { vastClient } = await import('../dist/core/vastClient.js');
 const { createHttpApp } = await import('../dist/http/server.js');
 const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
@@ -168,6 +169,26 @@ test('repairs an Anima template and reprovisions its workergroup before reuse', 
   assert.equal(writes[0].endpoint_id,502);
   assert.match(template.onstart,/qwen_3_06b_base\.safetensors/);
   assert.match(template.onstart,/qwen_image_vae\.safetensors/);
+});
+test('reprovisions a workergroup after a template LoRA edit changed its hash', async t => {
+  const lora={name:'Pearly',role:'lora',source:'civitai',ref:'123',filename:'pearly.safetensors',targetPath:'/workspace/ComfyUI/models/loras',weight:.45};
+  const marker=buildManagedBlock([lora]);
+  const deletes=[]; const writes=[];
+  t.mock.method(globalThis,'fetch',async (url,opts={})=>{
+    const path=new URL(url).pathname;
+    if(path.endsWith('/users/current/')) return json({id:42});
+    if(path.endsWith('/template/') && opts.method==='GET') return json({templates:[{id:81,hash_id:'hash-after-lora',name:'AKIRA - Edited',creator_id:42,image:'vastai/comfy',onstart:marker}]});
+    if(path.endsWith('/endptjobs')) return json({results:[{id:504,endpoint_name:'akira-edited',endpoint_state:'active'}]});
+    if(path.endsWith('/workergroups/') && opts.method==='GET') return json({results:[{id:605,endpoint_id:504,endpoint_name:'akira-edited',template_id:81,template_hash:'hash-before-lora',search_query:{num_gpus:{eq:'1'},inet_down:{gte:1000}}}]});
+    if(path.endsWith('/workergroups/605/') && opts.method==='DELETE') { deletes.push(path); return json({success:true}); }
+    if(path.endsWith('/workergroups/') && opts.method==='POST') { writes.push(JSON.parse(opts.body)); return json({id:606}); }
+    throw new Error(`unexpected path ${path} ${opts.method}`);
+  });
+  const result=await prepareTemplateEndpoint('81');
+  assert.deepEqual(deletes,['/api/v0/workergroups/605/']);
+  assert.equal(writes[0].endpoint_id,504);
+  assert.equal(writes[0].template_hash,'hash-after-lora');
+  assert.equal(result.workergroup.id,606);
 });
 test('image request routes auth_data separately and preserves complete workflow', async t => {
   let sends=0;

@@ -135,10 +135,15 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
   let endpointToReuse = existingGroup
     ? endpoints.find((item) => item.id === existingGroup?.endpointId || item.endpointName === existingGroup?.endpointName)
     : undefined;
-  if (readiness.updated && existingGroup) {
+  const groupUsesStaleTemplate = Boolean(
+    existingGroup?.templateHash && existingGroup.templateHash !== template.hash_id
+  );
+  if ((readiness.updated || groupUsesStaleTemplate) && existingGroup) {
     // A running/cached worker cannot see a changed onstart script. Recreate
     // only its workergroup so the existing endpoint remains stable while the
-    // next test worker provisions the newly attached runtime files.
+    // next test worker provisions newly attached models or LoRAs. A template
+    // edit changes its hash even when ensureAnimaRuntime itself had nothing to
+    // repair, so comparing the stored workergroup hash is required as well.
     await vastClient.delete(`/workergroups/${existingGroup.id}/`);
     existingGroup = undefined;
   }
