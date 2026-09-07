@@ -23,7 +23,20 @@ export type WorkergroupSummary = {
 // Vast's workergroup API documents search_params as its CLI-style query
 // string. Sending the normal offer-search JSON shape can be accepted but
 // stored as a nested value that never resolves to a rentable offer.
-const SINGLE_GPU_SEARCH = "verified=true rentable=true rented=false num_gpus=1";
+//
+// inet_down is the difference between a usable worker and a useless one: an
+// image model is several GB, and ComfyUI is held back until provisioning
+// finishes, so a 40 Mbit/s host spends ~22 minutes downloading before it can
+// answer anything — long enough for the autoscaler to replace it and start
+// over. Gbit hosts are also *cheaper* here, so this costs nothing.
+const WORKER_SEARCH = [
+  "verified=true",
+  "rentable=true",
+  "rented=false",
+  "num_gpus=1",
+  "inet_down>=1000",
+  "disk_space>=100",
+].join(" ");
 
 function rows(value: unknown): Record<string, unknown>[] {
   const root = value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -58,22 +71,29 @@ export async function listWorkergroups(): Promise<WorkergroupSummary[]> {
   });
 }
 
-function hasSingleGpuFilter(value: unknown): boolean {
-  return typeof value === "string" && /(?:^|\s)num_gpus\s*(?:=|==)\s*1(?:\s|$)/.test(value);
+/**
+ * Whether a stored workergroup query still matches what this agent asks for.
+ * Both parts matter: one GPU per image worker, and a host fast enough to
+ * finish provisioning before the autoscaler gives up on it.
+ */
+function hasCurrentWorkerFilters(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return /(?:^|\s)num_gpus\s*(?:=|==)\s*1(?:\s|$)/.test(value)
+    && /(?:^|\s)inet_down\s*>=?\s*\d+/.test(value);
 }
 
-async function ensureSingleGpuWorkergroup(group: WorkergroupSummary, template: { id: number; hash_id: string }) {
-  if (hasSingleGpuFilter(group.searchQuery)) return group;
+async function ensureWorkerFilters(group: WorkergroupSummary, template: { id: number; hash_id: string }) {
+  if (hasCurrentWorkerFilters(group.searchQuery)) return group;
   await vastClient.putOnce(`/workergroups/${group.id}/`, {
     template_hash: template.hash_id,
     template_id: template.id,
     endpoint_id: group.endpointId,
     endpoint_name: group.endpointName,
-    search_params: SINGLE_GPU_SEARCH,
+    search_params: WORKER_SEARCH,
     gpu_ram: 24,
     test_workers: 1,
   });
-  return { ...group, searchQuery: SINGLE_GPU_SEARCH };
+  return { ...group, searchQuery: WORKER_SEARCH };
 }
 
 async function ensureEndpointActive(endpoint: EndpointSummary): Promise<EndpointSummary> {
@@ -112,7 +132,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
     let endpoint = endpoints.find((item) => item.id === currentGroup.endpointId || item.endpointName === currentGroup.endpointName);
     if (!endpoint) throw new Error("A workergroup exists for this template, but its endpoint could not be found.");
     endpoint = await ensureEndpointActive(endpoint);
-    existingGroup = await ensureSingleGpuWorkergroup(currentGroup, template as { id: number; hash_id: string });
+    existingGroup = await ensureWorkerFilters(currentGroup, template as { id: number; hash_id: string });
     return { created: false, template: template.name, templateHash: template.hash_id, endpoint, workergroup: existingGroup };
   }
 
@@ -143,7 +163,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
       endpoint_name: endpoint.endpointName,
       template_hash: template.hash_id,
       template_id: template.id,
-      search_params: SINGLE_GPU_SEARCH,
+      search_params: WORKER_SEARCH,
       min_load: 0,
       target_util: 0.9,
       cold_mult: 1,
@@ -160,7 +180,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
       template: template.name,
       templateHash: template.hash_id,
       endpoint,
-      workergroup: { id, endpointId: endpoint.id, endpointName: endpoint.endpointName, templateId: template.id, templateHash: template.hash_id, gpuRam: 24, searchQuery: SINGLE_GPU_SEARCH },
+      workergroup: { id, endpointId: endpoint.id, endpointName: endpoint.endpointName, templateId: template.id, templateHash: template.hash_id, gpuRam: 24, searchQuery: WORKER_SEARCH },
     };
   } catch (error) {
     if (createdEndpoint) {
