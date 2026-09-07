@@ -19,13 +19,10 @@ export type WorkergroupSummary = {
   searchQuery: unknown;
 };
 
-const SINGLE_GPU_SEARCH = {
-  verified: { eq: true },
-  rentable: { eq: true },
-  rented: { eq: false },
-  gpu_ram: { gte: 24 },
-  num_gpus: { eq: 1 },
-};
+// Vast's workergroup API documents search_params as its CLI-style query
+// string. Sending the normal offer-search JSON shape can be accepted but
+// stored as a nested value that never resolves to a rentable offer.
+const SINGLE_GPU_SEARCH = "verified=true rentable=true rented=false num_gpus=1";
 
 function rows(value: unknown): Record<string, unknown>[] {
   const root = value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -61,11 +58,7 @@ export async function listWorkergroups(): Promise<WorkergroupSummary[]> {
 }
 
 function hasSingleGpuFilter(value: unknown): boolean {
-  if (typeof value === "string") return /(?:^|\s)num_gpus\s*(?:=|==)\s*1(?:\s|$)/.test(value);
-  if (!value || typeof value !== "object") return false;
-  const numGpus = (value as Record<string, unknown>).num_gpus;
-  if (numGpus === 1) return true;
-  return Boolean(numGpus && typeof numGpus === "object" && (numGpus as Record<string, unknown>).eq === 1);
+  return typeof value === "string" && /(?:^|\s)num_gpus\s*(?:=|==)\s*1(?:\s|$)/.test(value);
 }
 
 async function ensureSingleGpuWorkergroup(group: WorkergroupSummary, template: { id: number; hash_id: string }) {

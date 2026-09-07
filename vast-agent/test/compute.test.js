@@ -113,7 +113,7 @@ test('prepares one scale-to-zero endpoint and workergroup for a template', async
   assert.equal(writes[0].cold_workers,0);
   assert.equal(writes[0].max_workers,1);
   assert.equal(writes[1].template_hash,'hash-akira');
-  assert.equal(writes[1].search_params.num_gpus.eq,1);
+  assert.match(writes[1].search_params,/num_gpus=1/);
 });
 test('repairs an existing workergroup that can recruit multi-GPU offers', async t => {
   let updated;
@@ -128,7 +128,7 @@ test('repairs an existing workergroup that can recruit multi-GPU offers', async 
   });
   const result=await prepareTemplateEndpoint('hash-akira');
   assert.equal(result.created,false);
-  assert.equal(updated.search_params.num_gpus.eq,1);
+  assert.match(updated.search_params,/num_gpus=1/);
 });
 test('starts a stopped endpoint before reusing its workergroup', async t => {
   let endpointUpdate;
@@ -137,7 +137,7 @@ test('starts a stopped endpoint before reusing its workergroup', async t => {
     if(path.endsWith('/users/current/')) return json({id:42});
     if(path.endsWith('/template/')) return json({templates:[{id:77,hash_id:'hash-akira',name:'AKIRA - Test',creator_id:42,image:'vastai/comfy'}]});
     if(path.endsWith('/endptjobs')) return json({results:[{id:501,endpoint_name:'akira-test',endpoint_state:'stopped'}]});
-    if(path.endsWith('/workergroups/') && opts.method==='GET') return json({results:[{id:601,endpoint_id:501,endpoint_name:'akira-test',template_id:77,template_hash:'hash-akira',search_query:{num_gpus:{eq:1}}}]});
+    if(path.endsWith('/workergroups/') && opts.method==='GET') return json({results:[{id:601,endpoint_id:501,endpoint_name:'akira-test',template_id:77,template_hash:'hash-akira',search_query:'verified=true rentable=true rented=false num_gpus=1'}]});
     if(path.endsWith('/endptjobs/501') && opts.method==='PUT') { endpointUpdate=JSON.parse(opts.body); return json({success:true}); }
     throw new Error(`unexpected path ${path} ${opts.method}`);
   });
