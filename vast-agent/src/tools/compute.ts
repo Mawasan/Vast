@@ -3,6 +3,7 @@ import type { ToolDef } from "./registry.js";
 import { getJob, submitJob } from "../core/jobs.js";
 import { searchOffers, rentInstance, setInstanceState } from "../vast/lifecycle.js";
 import { runInference } from "../vast/inference.js";
+import { selectLoras } from "../vast/loraSelection.js";
 import { listModelsInTemplate } from "../vast/templateEdit.js";
 import { buildAnimaApiWorkflow } from "../comfyui/anima.js";
 import { buildSdxlApiWorkflow } from "../comfyui/sdxl.js";
@@ -16,6 +17,15 @@ const cost = z.number().finite().nonnegative().default(100).describe("Estimated 
 const timeoutSeconds = z.number().int().min(10).max(1800).default(600);
 const preview = (action: string, details: unknown) => ({ status: "confirmation_required", action, details, message: "Set confirm:true once this operation is authorized. Existing explicit authorization is sufficient." });
 const inferenceShape = { requestId, endpoint, cost, timeoutSeconds, confirm };
+/**
+ * Which of a template's LoRAs a single request wants. A template that backs
+ * one shared endpoint carries every LoRA, so the caller picks per image.
+ */
+const loraSelection = z
+  .array(z.object({ name: z.string().min(1), weight: z.number().finite().min(0).max(2).optional() }))
+  .optional()
+  .describe("Which of the template's LoRAs to apply, in chain order, with optional strength overrides. Omit to apply every LoRA the template carries; pass [] for the plain base model.");
+
 export const computeTools: ToolDef[] = [
   def({ name: "vast_search_offers", description: "Search current on-demand GPU offers with pricing. Read-only. Put Vast fields directly inside filters (never another filters object), e.g. gpu_name:{eq:'RTX_4090'}, gpu_ram:{gte:24000}, dph_total:{lte:0.5}.",
     inputShape: { filters: z.record(z.string(), z.unknown()).default({}), limit: z.number().int().min(1).max(100).default(10), diskGb: z.number().positive().max(10000).default(40) },
@@ -45,7 +55,7 @@ export const computeTools: ToolDef[] = [
       const args = { ...input, path: "/generate/sync", payload: { input: { request_id: requestId, workflow_json: workflow } } };
       return confirm ? submitJob(requestId, "image", args, () => runInference(args)) : preview("image_generation", { endpoint: input.endpoint });
     } }),
-  def({ name: "vast_generate_anima_image", description: "Generate an image with an AKIRA Anima template on an existing Vast Serverless ComfyUI endpoint. Builds the correct UNET/Anima workflow automatically and chains every compatible LoRA attached to the template at its saved weight. Returns a durable job; poll vast_get_job.",
+  def({ name: "vast_generate_anima_image", description: "Generate an image with an AKIRA Anima template on an existing Vast Serverless ComfyUI endpoint. Builds the correct UNET/Anima workflow automatically and chains the LoRAs chosen in `loras`, or every attached LoRA at its saved weight when that is omitted. Returns a durable job; poll vast_get_job.",
     inputShape: {
       ...inferenceShape,
       template: z.string().min(1),
@@ -58,17 +68,18 @@ export const computeTools: ToolDef[] = [
       samplerName: z.string().default("er_sde"),
       scheduler: z.string().default("simple"),
       seed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+      loras: loraSelection,
     },
-    handler: async ({ requestId, confirm, template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, ...input }) => {
-      const operation = { template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, ...input };
+    handler: async ({ requestId, confirm, template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, ...input }) => {
+      const operation = { template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, ...input };
       if (!confirm) return preview("anima_image_generation", { endpoint: input.endpoint, template, width, height });
       return submitJob(requestId, "anima_image", operation, async () => {
-        const resources = await listModelsInTemplate(template);
+        const resources = selectLoras(await listModelsInTemplate(template), loras);
         const workflow = buildAnimaApiWorkflow(resources, { prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed });
         return runInference({ ...input, path: "/generate/sync", payload: { input: { request_id: requestId, workflow_json: workflow } } });
       });
     } }),
-  def({ name: "vast_generate_template_image", description: "Generate an image from any AKIRA Anima or SDXL/Illustrious template on its matching Vast Serverless endpoint. Builds the family-correct workflow and applies all template LoRAs in order. Returns a durable job; poll vast_get_job.",
+  def({ name: "vast_generate_template_image", description: "Generate an image from any AKIRA Anima or SDXL/Illustrious template on its matching Vast Serverless endpoint. Builds the family-correct workflow. Pass `loras` to choose which of the template's LoRAs apply; omitted, every attached LoRA is chained in order. Returns a durable job; poll vast_get_job.",
     inputShape: {
       ...inferenceShape,
       template: z.string().min(1),
@@ -81,12 +92,13 @@ export const computeTools: ToolDef[] = [
       samplerName: z.string().optional(),
       scheduler: z.string().optional(),
       seed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+      loras: loraSelection,
     },
-    handler: async ({ requestId, confirm, template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, ...input }) => {
-      const operation = { template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, ...input };
+    handler: async ({ requestId, confirm, template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, ...input }) => {
+      const operation = { template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, ...input };
       if (!confirm) return preview("template_image_generation", { endpoint: input.endpoint, template, width: width ?? "family default", height: height ?? "family default" });
       return submitJob(requestId, "template_image", operation, async () => {
-        const resources = await listModelsInTemplate(template);
+        const resources = selectLoras(await listModelsInTemplate(template), loras);
         const base = resources.find((resource) => resource.role === "base");
         if (!base) throw new Error("The selected template has no attached base model.");
         const options = { prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed };
