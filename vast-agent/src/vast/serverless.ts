@@ -82,6 +82,12 @@ async function ensureSingleGpuWorkergroup(group: WorkergroupSummary, template: {
   return { ...group, searchQuery: SINGLE_GPU_SEARCH };
 }
 
+async function ensureEndpointActive(endpoint: EndpointSummary): Promise<EndpointSummary> {
+  if (endpoint.state === "active") return endpoint;
+  await vastClient.putOnce(`/endptjobs/${endpoint.id}`, { endpoint_state: "active" });
+  return { ...endpoint, state: "active" };
+}
+
 function endpointNameFor(templateName: string, hash: string): string {
   const slug = templateName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 42) || "model";
   return `akira-${slug}-${hash.slice(0, 6)}`;
@@ -105,8 +111,9 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
   }
   if (existingGroup) {
     const currentGroup = existingGroup;
-    const endpoint = endpoints.find((item) => item.id === currentGroup.endpointId || item.endpointName === currentGroup.endpointName);
+    let endpoint = endpoints.find((item) => item.id === currentGroup.endpointId || item.endpointName === currentGroup.endpointName);
     if (!endpoint) throw new Error("A workergroup exists for this template, but its endpoint could not be found.");
+    endpoint = await ensureEndpointActive(endpoint);
     existingGroup = await ensureSingleGpuWorkergroup(currentGroup, template as { id: number; hash_id: string });
     return { created: false, template: template.name, templateHash: template.hash_id, endpoint, workergroup: existingGroup };
   }
@@ -128,6 +135,8 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
     if (id === null) throw new Error("Vast created no usable endpoint id.");
     endpoint = { id, endpointName, state: "active", maxWorkers: 1, coldWorkers: 0 };
     createdEndpoint = true;
+  } else {
+    endpoint = await ensureEndpointActive(endpoint);
   }
 
   try {
