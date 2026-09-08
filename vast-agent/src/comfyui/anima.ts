@@ -19,8 +19,7 @@ const fileOf = (resource: ModelResource) => resource.filename ?? `${resource.nam
 
 /**
  * Minimal, custom-node-free Anima workflow for ComfyUI's API format.
- * Anima uses a diffusion-model loader and model-only LoRAs, unlike SDXL's
- * CheckpointLoaderSimple + MODEL/CLIP LoRA chain.
+ * Anima is Qwen-Image: UNET + Qwen CLIP + Qwen VAE, not an SDXL checkpoint.
  */
 export function buildAnimaApiWorkflow(
   resources: ModelResource[],
@@ -48,7 +47,11 @@ export function buildAnimaApiWorkflow(
     },
     "2": {
       class_type: "CLIPLoader",
-      inputs: { clip_name: textEncoder ? fileOf(textEncoder) : "qwen_3_06b_base.safetensors", type: "stable_diffusion", device: "default" },
+      inputs: {
+        clip_name: textEncoder ? fileOf(textEncoder) : "qwen_3_06b_base.safetensors",
+        type: "qwen_image",
+        device: "default",
+      },
       _meta: { title: "Anima text encoder" },
     },
     "3": {
@@ -82,14 +85,15 @@ export function buildAnimaApiWorkflow(
   const saveId = String(nextId++);
   workflow[positiveId] = { class_type: "CLIPTextEncode", inputs: { text: options.prompt, clip: ["2", 0] } };
   workflow[negativeId] = { class_type: "CLIPTextEncode", inputs: { text: options.negativePrompt ?? "worst quality, low quality, lowres, blurry, bad anatomy, watermark, text", clip: ["2", 0] } };
-  workflow[latentId] = { class_type: "EmptyLatentImage", inputs: { width, height, batch_size: 1 } };
+  // Qwen-Image / Anima uses SD3-shaped latents, not SD1.5/SDXL EmptyLatentImage.
+  workflow[latentId] = { class_type: "EmptySD3LatentImage", inputs: { width, height, batch_size: 1 } };
   workflow[samplerId] = {
     class_type: "KSampler",
     inputs: {
       seed: options.seed ?? Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
       steps: options.steps ?? 35,
       cfg: options.cfg ?? 4.5,
-      sampler_name: options.samplerName ?? "er_sde",
+      sampler_name: options.samplerName ?? "euler",
       scheduler: options.scheduler ?? "simple",
       denoise: 1,
       model: modelRef,
