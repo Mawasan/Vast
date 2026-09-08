@@ -41,11 +41,11 @@ export const computeTools: ToolDef[] = [
   })),
   def({ name: "vast_list_endpoints", description: "List configured Vast Serverless endpoints to find the name required for inference. Omits endpoint credentials.", inputShape: {}, handler: async () => listEndpoints() }),
   def({ name: "vast_list_workergroups", description: "List Vast Serverless workergroups and their endpoint/template mapping. Omits endpoint credentials and launch secrets.", inputShape: {}, handler: async () => listWorkergroups() }),
-  def({ name: "vast_prepare_template_endpoint", description: "Create a scale-to-zero Vast Serverless endpoint and workergroup for an existing image template, or reuse its existing workergroup. A test worker may start and incur GPU cost. Requires confirm:true.",
+  def({ name: "vast_prepare_template_endpoint", description: "Create a scale-to-zero Vast Serverless endpoint and workergroup for an existing image template, or reuse its existing workergroup. Keeps one cold (stopped) worker disk so models survive scale-down; does not launch an idle GPU. Requires confirm:true.",
     inputShape: { template: z.string().min(1), endpointName: z.string().optional(), confirm },
     handler: async ({ template, endpointName, confirm }) => confirm
       ? prepareTemplateEndpoint(template, endpointName)
-      : preview("prepare_template_endpoint", { template, endpointName: endpointName || "automatic", maxWorkers: 1, coldWorkers: 0, testWorkers: 1 }) }),
+      : preview("prepare_template_endpoint", { template, endpointName: endpointName || "automatic", maxWorkers: 1, coldWorkers: 1, testWorkers: 0 }) }),
   def({ name: "vast_serverless_request", description: "Run text, image, audio, or video inference on an existing Vast Serverless endpoint using its native payload. Returns a durable job ID immediately; poll vast_get_job. Can trigger autoscaling and costs. No API keys needed in arguments. Does not create/configure endpoints.",
     inputShape: { ...inferenceShape, path: z.enum(["/generate/sync", "/generate", "/v1/chat/completions", "/v1/completions", "/v1/audio/speech", "/v1/images/generations"]), payload: z.record(z.string(), z.unknown()) },
     handler: async ({ requestId, confirm, ...input }) => confirm ? submitJob(requestId, "inference", input, () => runInference(input)) : preview("inference", { endpoint: input.endpoint, path: input.path }) }),
