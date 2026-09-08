@@ -101,11 +101,17 @@ function hasCurrentWorkerFilters(value: unknown): boolean {
   return singleGpu && bandwidth;
 }
 
+function isScaleToZero(group: WorkergroupSummary): boolean {
+  // cold_workers=1 keeps a stopped disk with models. test_workers=1 is a
+  // permanently running GPU — that is idle billing, not retention.
+  return group.coldWorkers === 1 && (group.testWorkers === 0 || group.testWorkers == null);
+}
+
 async function ensureWorkerConfiguration(group: WorkergroupSummary, template: { id: number; hash_id: string }) {
   // Keep one stopped ("cold") worker after initial provisioning. Its disk
   // retains the downloaded models, avoiding a multi-gigabyte download on
   // every scale-up while still avoiding idle GPU charges.
-  if (hasCurrentWorkerFilters(group.searchQuery) && group.coldWorkers === 1) return group;
+  if (hasCurrentWorkerFilters(group.searchQuery) && isScaleToZero(group)) return group;
   await vastClient.putOnce(`/workergroups/${group.id}/`, {
     template_hash: template.hash_id,
     template_id: template.id,
@@ -114,9 +120,9 @@ async function ensureWorkerConfiguration(group: WorkergroupSummary, template: { 
     search_params: WORKER_SEARCH,
     gpu_ram: 24,
     cold_workers: 1,
-    test_workers: 1,
+    test_workers: 0,
   });
-  return { ...group, searchQuery: WORKER_SEARCH, coldWorkers: 1, testWorkers: 1 };
+  return { ...group, searchQuery: WORKER_SEARCH, coldWorkers: 1, testWorkers: 0 };
 }
 
 async function ensureEndpointActive(endpoint: EndpointSummary): Promise<EndpointSummary> {
@@ -149,7 +155,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
   if ((readiness.updated || groupUsesStaleTemplate) && existingGroup) {
     // A running/cached worker cannot see a changed onstart script. Recreate
     // only its workergroup so the existing endpoint remains stable while the
-    // next test worker provisions newly attached models or LoRAs. A template
+    // next request provisions newly attached models or LoRAs. A template
     // edit changes its hash even when ensureAnimaRuntime itself had nothing to
     // repair, so comparing the stored workergroup hash is required as well.
     await vastClient.delete(`/workergroups/${existingGroup.id}/`);
@@ -197,7 +203,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
       cold_mult: 1,
       cold_workers: 1,
       max_workers: 1,
-      test_workers: 1,
+      test_workers: 0,
       gpu_ram: 24,
     }) as Record<string, unknown>;
     const id = typeof response.id === "number" ? response.id : typeof response.result === "number" ? response.result : null;
@@ -208,7 +214,7 @@ export async function prepareTemplateEndpoint(templateRef: string, requestedName
       template: template.name,
       templateHash: template.hash_id,
       endpoint,
-      workergroup: { id, endpointId: endpoint.id, endpointName: endpoint.endpointName, templateId: template.id, templateHash: template.hash_id, gpuRam: 24, coldWorkers: 1, testWorkers: 1, searchQuery: WORKER_SEARCH },
+      workergroup: { id, endpointId: endpoint.id, endpointName: endpoint.endpointName, templateId: template.id, templateHash: template.hash_id, gpuRam: 24, coldWorkers: 1, testWorkers: 0, searchQuery: WORKER_SEARCH },
     };
   } catch (error) {
     if (createdEndpoint) {
