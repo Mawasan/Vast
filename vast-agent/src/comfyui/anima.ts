@@ -10,12 +10,45 @@ export interface AnimaWorkflowOptions {
   samplerName?: string;
   scheduler?: string;
   seed?: number;
+  /** Filename already uploaded to the worker's ComfyUI input folder. */
+  initImage?: string;
 }
 
 type ApiNode = { class_type: string; inputs: Record<string, unknown>; _meta?: { title: string } };
 export type ApiWorkflow = Record<string, ApiNode>;
 
 const fileOf = (resource: ModelResource) => resource.filename ?? `${resource.name}.safetensors`;
+
+function nextNodeId(workflow: ApiWorkflow): string {
+  return String(Math.max(0, ...Object.keys(workflow).map(Number)) + 1);
+}
+
+/** Encode a worker-side reference image into the sampler latent. */
+export function attachInitImage(
+  workflow: ApiWorkflow,
+  initImage: string,
+  vae: [string, number],
+  width: number,
+  height: number,
+): [string, number] {
+  const loadId = nextNodeId(workflow);
+  workflow[loadId] = {
+    class_type: "LoadImage",
+    inputs: { image: initImage },
+    _meta: { title: "Character reference" },
+  };
+  const scaleId = nextNodeId(workflow);
+  workflow[scaleId] = {
+    class_type: "ImageScale",
+    inputs: { image: [loadId, 0], upscale_method: "lanczos", width, height, crop: "center" },
+  };
+  const encodeId = nextNodeId(workflow);
+  workflow[encodeId] = {
+    class_type: "VAEEncode",
+    inputs: { pixels: [scaleId, 0], vae },
+  };
+  return [encodeId, 0];
+}
 
 /**
  * Minimal, custom-node-free Anima workflow for ComfyUI's API format.
@@ -79,14 +112,20 @@ export function buildAnimaApiWorkflow(
 
   const positiveId = String(nextId++);
   const negativeId = String(nextId++);
-  const latentId = String(nextId++);
-  const samplerId = String(nextId++);
-  const decodeId = String(nextId++);
-  const saveId = String(nextId++);
   workflow[positiveId] = { class_type: "CLIPTextEncode", inputs: { text: options.prompt, clip: ["2", 0] } };
   workflow[negativeId] = { class_type: "CLIPTextEncode", inputs: { text: options.negativePrompt ?? "worst quality, low quality, lowres, blurry, bad anatomy, watermark, text", clip: ["2", 0] } };
-  // Qwen-Image / Anima uses SD3-shaped latents, not SD1.5/SDXL EmptyLatentImage.
-  workflow[latentId] = { class_type: "EmptySD3LatentImage", inputs: { width, height, batch_size: 1 } };
+
+  const latentRef = options.initImage
+    ? attachInitImage(workflow, options.initImage, ["3", 0], width, height)
+    : (() => {
+        const latentId = String(nextId++);
+        workflow[latentId] = { class_type: "EmptySD3LatentImage", inputs: { width, height, batch_size: 1 } };
+        return [latentId, 0] as [string, number];
+      })();
+
+  const samplerId = nextNodeId(workflow);
+  const decodeId = String(Number(samplerId) + 1);
+  const saveId = String(Number(samplerId) + 2);
   workflow[samplerId] = {
     class_type: "KSampler",
     inputs: {
@@ -95,11 +134,11 @@ export function buildAnimaApiWorkflow(
       cfg: options.cfg ?? 4.5,
       sampler_name: options.samplerName ?? "euler",
       scheduler: options.scheduler ?? "simple",
-      denoise: 1,
+      denoise: options.initImage ? 0.68 : 1,
       model: modelRef,
       positive: [positiveId, 0],
       negative: [negativeId, 0],
-      latent_image: [latentId, 0],
+      latent_image: latentRef,
     },
   };
   workflow[decodeId] = { class_type: "VAEDecode", inputs: { samples: [samplerId, 0], vae: ["3", 0] } };
