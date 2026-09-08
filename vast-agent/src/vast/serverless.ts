@@ -1,0 +1,225 @@
+import { vastClient } from "../core/vastClient.js";
+import { ensureAnimaRuntime } from "./templateEdit.js";
+import { describeUnreachable, findUnreachableResources } from "./resourceCheck.js";
+
+export type EndpointSummary = {
+  id: number;
+  endpointName: string;
+  state: string | null;
+  maxWorkers: number | null;
+  coldWorkers: number | null;
+};
+
+export type WorkergroupSummary = {
+  id: number;
+  endpointId: number | null;
+  endpointName: string | null;
+  templateId: number | null;
+  templateHash: string | null;
+  gpuRam: number | null;
+  coldWorkers: number | null;
+  testWorkers: number | null;
+  searchQuery: unknown;
+};
+
+// Vast's workergroup API documents search_params as its CLI-style query
+// string. Sending the normal offer-search JSON shape can be accepted but
+// stored as a nested value that never resolves to a rentable offer.
+//
+// inet_down is the difference between a usable worker and a useless one: an
+// image model is several GB, and ComfyUI is held back until provisioning
+// finishes, so a 40 Mbit/s host spends ~22 minutes downloading before it can
+// answer anything — long enough for the autoscaler to replace it and start
+// over. Gbit hosts are also *cheaper* here, so this costs nothing.
+const WORKER_SEARCH = [
+  "verified=true",
+  "rentable=true",
+  "rented=false",
+  "num_gpus=1",
+  "inet_down>=1000",
+  "disk_space>=100",
+].join(" ");
+
+function rows(value: unknown): Record<string, unknown>[] {
+  const root = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return Array.isArray(root.results) ? root.results.filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object")) : [];
+}
+
+export async function listEndpoints(): Promise<EndpointSummary[]> {
+  return rows(await vastClient.get("/endptjobs")).flatMap((row) => {
+    if (typeof row.id !== "number" || typeof row.endpoint_name !== "string") return [];
+    return [{
+      id: row.id,
+      endpointName: row.endpoint_name,
+      state: typeof row.endpoint_state === "string" ? row.endpoint_state : null,
+      maxWorkers: typeof row.max_workers === "number" ? row.max_workers : null,
+      coldWorkers: typeof row.cold_workers === "number" ? row.cold_workers : null,
+    }];
+  });
+}
+
+export async function listWorkergroups(): Promise<WorkergroupSummary[]> {
+  return rows(await vastClient.get("/workergroups/")).flatMap((row) => {
+    if (typeof row.id !== "number") return [];
+    return [{
+      id: row.id,
+      endpointId: typeof row.endpoint_id === "number" ? row.endpoint_id : null,
+      endpointName: typeof row.endpoint_name === "string" ? row.endpoint_name : null,
+      templateId: typeof row.template_id === "number" ? row.template_id : null,
+      templateHash: typeof row.template_hash === "string" ? row.template_hash : null,
+      gpuRam: typeof row.gpu_ram === "number" ? row.gpu_ram : null,
+      coldWorkers: typeof row.cold_workers === "number" ? row.cold_workers : null,
+      testWorkers: typeof row.test_workers === "number" ? row.test_workers : null,
+      searchQuery: row.search_query ?? row.search_params ?? null,
+    }];
+  });
+}
+
+/**
+ * Whether a stored workergroup query still matches what this agent asks for.
+ * Both parts matter: one GPU per image worker, and a host fast enough to
+ * finish provisioning before the autoscaler gives up on it.
+ *
+ * Vast accepts `search_params` as a CLI-style string but reads it back
+ * parsed and merged with the template's extra_filters, so the stored value
+ * is normally an object ({"num_gpus":{"eq":"1"}}). Both shapes are checked;
+ * anything else counts as out of date and gets rewritten.
+ */
+function hasCurrentWorkerFilters(value: unknown): boolean {
+  if (typeof value === "string") {
+    return /(?:^|\s)num_gpus\s*(?:=|==)\s*1(?:\s|$)/.test(value)
+      && /(?:^|\s)inet_down\s*>=?\s*\d+/.test(value);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const query = value as Record<string, unknown>;
+  const clause = (key: string): Record<string, unknown> | null => {
+    const raw = query[key];
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+  };
+  const singleGpu = Number(clause("num_gpus")?.eq) === 1;
+  const bandwidth = Number(clause("inet_down")?.gte) >= 1000;
+  return singleGpu && bandwidth;
+}
+
+function isScaleToZero(group: WorkergroupSummary): boolean {
+  // cold_workers=1 keeps a stopped disk with models. test_workers=1 is a
+  // permanently running GPU — that is idle billing, not retention.
+  return group.coldWorkers === 1 && (group.testWorkers === 0 || group.testWorkers == null);
+}
+
+async function ensureWorkerConfiguration(group: WorkergroupSummary, template: { id: number; hash_id: string }) {
+  // Keep one stopped ("cold") worker after initial provisioning. Its disk
+  // retains the downloaded models, avoiding a multi-gigabyte download on
+  // every scale-up while still avoiding idle GPU charges.
+  if (hasCurrentWorkerFilters(group.searchQuery) && isScaleToZero(group)) return group;
+  await vastClient.putOnce(`/workergroups/${group.id}/`, {
+    template_hash: template.hash_id,
+    template_id: template.id,
+    endpoint_id: group.endpointId,
+    endpoint_name: group.endpointName,
+    search_params: WORKER_SEARCH,
+    gpu_ram: 24,
+    cold_workers: 1,
+    test_workers: 0,
+  });
+  return { ...group, searchQuery: WORKER_SEARCH, coldWorkers: 1, testWorkers: 0 };
+}
+
+async function ensureEndpointActive(endpoint: EndpointSummary): Promise<EndpointSummary> {
+  if (endpoint.state === "active") return endpoint;
+  await vastClient.putOnce(`/endptjobs/${endpoint.id}`, { endpoint_state: "active" });
+  return { ...endpoint, state: "active" };
+}
+
+function endpointNameFor(templateName: string, hash: string): string {
+  const slug = templateName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 42) || "model";
+  return `akira-${slug}-${hash.slice(0, 6)}`;
+}
+
+export async function prepareTemplateEndpoint(templateRef: string, requestedName?: string) {
+  const readiness = await ensureAnimaRuntime(templateRef);
+  const template = readiness.template;
+  if (!template.hash_id || typeof template.id !== "number") throw new Error("The selected template has no usable Vast id/hash.");
+  // Checked before any workergroup exists: a worker whose downloads 401 boots
+  // regardless and only fails once the paid GPU serves a request.
+  const unreachable = await findUnreachableResources(readiness.resources);
+  if (unreachable.length > 0) throw new Error(describeUnreachable(template.name ?? templateRef, unreachable));
+  const [endpoints, workergroups] = await Promise.all([listEndpoints(), listWorkergroups()]);
+  let existingGroup = workergroups.find((group) => group.templateHash === template.hash_id || group.templateId === template.id);
+  let endpointToReuse = existingGroup
+    ? endpoints.find((item) => item.id === existingGroup?.endpointId || item.endpointName === existingGroup?.endpointName)
+    : undefined;
+  const groupUsesStaleTemplate = Boolean(
+    existingGroup?.templateHash && existingGroup.templateHash !== template.hash_id
+  );
+  if ((readiness.updated || groupUsesStaleTemplate) && existingGroup) {
+    // A running/cached worker cannot see a changed onstart script. Recreate
+    // only its workergroup so the existing endpoint remains stable while the
+    // next request provisions newly attached models or LoRAs. A template
+    // edit changes its hash even when ensureAnimaRuntime itself had nothing to
+    // repair, so comparing the stored workergroup hash is required as well.
+    await vastClient.delete(`/workergroups/${existingGroup.id}/`);
+    existingGroup = undefined;
+  }
+  if (existingGroup) {
+    const currentGroup = existingGroup;
+    let endpoint = endpoints.find((item) => item.id === currentGroup.endpointId || item.endpointName === currentGroup.endpointName);
+    if (!endpoint) throw new Error("A workergroup exists for this template, but its endpoint could not be found.");
+    endpoint = await ensureEndpointActive(endpoint);
+    existingGroup = await ensureWorkerConfiguration(currentGroup, template as { id: number; hash_id: string });
+    return { created: false, template: template.name, templateHash: template.hash_id, endpoint, workergroup: existingGroup };
+  }
+
+  const endpointName = requestedName?.trim() || endpointToReuse?.endpointName || endpointNameFor(template.name ?? template.hash_id, template.hash_id);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,63}$/.test(endpointName)) throw new Error("Endpoint name must be 3-64 letters, numbers, dots, underscores, or hyphens.");
+  let endpoint = endpointToReuse ?? endpoints.find((item) => item.endpointName === endpointName);
+  let createdEndpoint = false;
+  if (!endpoint) {
+    const response = await vastClient.post("/endptjobs/", {
+      endpoint_name: endpointName,
+      min_load: 0,
+      target_util: 0.9,
+      cold_mult: 1,
+      cold_workers: 1,
+      max_workers: 1,
+    }) as Record<string, unknown>;
+    const id = typeof response.result === "number" ? response.result : typeof response.id === "number" ? response.id : null;
+    if (id === null) throw new Error("Vast created no usable endpoint id.");
+    endpoint = { id, endpointName, state: "active", maxWorkers: 1, coldWorkers: 1 };
+    createdEndpoint = true;
+  } else {
+    endpoint = await ensureEndpointActive(endpoint);
+  }
+
+  try {
+    const response = await vastClient.post("/workergroups/", {
+      endpoint_id: endpoint.id,
+      endpoint_name: endpoint.endpointName,
+      template_hash: template.hash_id,
+      template_id: template.id,
+      search_params: WORKER_SEARCH,
+      min_load: 0,
+      target_util: 0.9,
+      cold_mult: 1,
+      cold_workers: 1,
+      max_workers: 1,
+      test_workers: 0,
+      gpu_ram: 24,
+    }) as Record<string, unknown>;
+    const id = typeof response.id === "number" ? response.id : typeof response.result === "number" ? response.result : null;
+    if (id === null) throw new Error("Vast created no usable workergroup id.");
+    return {
+      created: true,
+      templateUpdated: readiness.updated,
+      template: template.name,
+      templateHash: template.hash_id,
+      endpoint,
+      workergroup: { id, endpointId: endpoint.id, endpointName: endpoint.endpointName, templateId: template.id, templateHash: template.hash_id, gpuRam: 24, coldWorkers: 1, testWorkers: 0, searchQuery: WORKER_SEARCH },
+    };
+  } catch (error) {
+    if (createdEndpoint) {
+      try { await vastClient.delete(`/endptjobs/${endpoint.id}/`); } catch { /* return the original error */ }
+    }
+    throw error;
+  }
+}
