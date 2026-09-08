@@ -1,7 +1,11 @@
 import type { ModelResource } from "../core/types.js";
-import type { AnimaWorkflowOptions, ApiWorkflow } from "./anima.js";
+import { attachInitImage, type AnimaWorkflowOptions, type ApiWorkflow } from "./anima.js";
 
 const fileOf = (resource: ModelResource) => resource.filename ?? `${resource.name}.safetensors`;
+
+function nextNodeId(workflow: ApiWorkflow): string {
+  return String(Math.max(0, ...Object.keys(workflow).map(Number)) + 1);
+}
 
 /** Minimal API-format SDXL/Illustrious workflow built from one template's resources. */
 export function buildSdxlApiWorkflow(resources: ModelResource[], options: AnimaWorkflowOptions): ApiWorkflow {
@@ -36,13 +40,20 @@ export function buildSdxlApiWorkflow(resources: ModelResource[], options: AnimaW
 
   const positiveId = String(nextId++);
   const negativeId = String(nextId++);
-  const latentId = String(nextId++);
-  const samplerId = String(nextId++);
-  const decodeId = String(nextId++);
-  const saveId = String(nextId++);
   workflow[positiveId] = { class_type: "CLIPTextEncode", inputs: { text: options.prompt, clip: clipRef } };
   workflow[negativeId] = { class_type: "CLIPTextEncode", inputs: { text: options.negativePrompt ?? "worst quality, low quality, lowres, blurry, bad anatomy, bad hands, watermark, text", clip: clipRef } };
-  workflow[latentId] = { class_type: "EmptyLatentImage", inputs: { width, height, batch_size: 1 } };
+
+  const latentRef = options.initImage
+    ? attachInitImage(workflow, options.initImage, ["1", 2], width, height)
+    : (() => {
+        const latentId = String(nextId++);
+        workflow[latentId] = { class_type: "EmptyLatentImage", inputs: { width, height, batch_size: 1 } };
+        return [latentId, 0] as [string, number];
+      })();
+
+  const samplerId = nextNodeId(workflow);
+  const decodeId = String(Number(samplerId) + 1);
+  const saveId = String(Number(samplerId) + 2);
   workflow[samplerId] = {
     class_type: "KSampler",
     inputs: {
@@ -51,11 +62,11 @@ export function buildSdxlApiWorkflow(resources: ModelResource[], options: AnimaW
       cfg: options.cfg ?? 5.5,
       sampler_name: options.samplerName ?? "dpmpp_2m_sde",
       scheduler: options.scheduler ?? "karras",
-      denoise: 1,
+      denoise: options.initImage ? 0.68 : 1,
       model: modelRef,
       positive: [positiveId, 0],
       negative: [negativeId, 0],
-      latent_image: [latentId, 0],
+      latent_image: latentRef,
     },
   };
   workflow[decodeId] = { class_type: "VAEDecode", inputs: { samples: [samplerId, 0], vae: ["1", 2] } };
