@@ -2,6 +2,20 @@
 
 This repository provisions Sayuri onto a normal Vast PyTorch instance; it does not require building or publishing a custom Docker image. `core` starts only the OpenAI-compatible Qwen API on GPUs 0 and 1. `full` additionally starts the media API on GPU 2. The Qwen process receives `CUDA_VISIBLE_DEVICES=0,1`, so it cannot reserve GPU 2. The media process receives only GPU 2, where Chatterbox is loaded on demand and explicitly unloaded before Wan begins.
 
+## What is in this repository
+
+Two separate things share this repository:
+
+| Path | What it is |
+| --- | --- |
+| `provision.sh`, `start.sh`, `services/`, `comfyui/`, `requirements/` | **Sayuri on Vast.ai** — the provisioning scripts described in the rest of this README. Run on the instance itself. |
+| [`vast-agent/`](vast-agent/) | **VAST Agent** — a standalone MCP + REST service that manages Vast.ai templates, serverless endpoints and image generation. Runs off the instance, deployed on Railway. See [`vast-agent/README.md`](vast-agent/README.md). |
+
+They do not depend on each other. If you are looking for the thing AKIRA talks
+to when it generates an image, it is the agent, and it is already running at
+<https://vast-agent-production.up.railway.app> — see
+[Deployment of record](vast-agent/README.md#deployment-of-record).
+
 ## Vast.ai settings
 
 Choose a current Vast PyTorch image with CUDA support for A100, SSH enabled, and a three-GPU machine with exactly 3 x A100 80 GB. Set disk to 600 GB (500 GB is an absolute lower bound), RAM to at least 256 GB and preferably 384 GB, and expose TCP ports `8000` and `8100`. Do not expose these ports publicly without a firewall or `SAYURI_API_KEY`.

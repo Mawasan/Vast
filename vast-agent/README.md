@@ -67,6 +67,36 @@ npm run start:http    # HTTP + MCP-over-HTTP on $PORT (default 8080)
 `GET /health` never touches the Vast.ai API — it only reports whether a key
 is configured, so Railway's health check works even if Vast.ai is down.
 
+## Deployment of record
+
+There is one running deployment, and everything that matters talks to it. If
+you are wondering "where is the agent", this is the answer:
+
+| | |
+| --- | --- |
+| URL | <https://vast-agent-production.up.railway.app> |
+| MCP (Streamable HTTP) | `POST /mcp` |
+| REST | `GET /api/tools`, `POST /api/tools/:name` |
+| Health | `GET /health` |
+| Platform | Railway, project `0ed8c974-b537-45ae-9d38-5224b7382e28`, service `vast-agent` (`983f083d-c2af-4205-b041-87e22d74eea8`), `production` environment |
+| Source | this repository, `vast-agent/`, branch `claude/vast-agent-standalone-xis1xq` |
+| Deploys | automatically on push to that branch |
+
+Its callers:
+
+- **AKIRA-UI** (same Railway project) calls `POST /api/tools/<name>` with
+  `Authorization: Bearer $VAST_AGENT_ACCESS_TOKEN`. That URL is its
+  `VAST_AGENT_URL`, and the same host is the built-in default, so AKIRA
+  reaches this deployment even with the variable unset.
+- **MCP clients** (Claude Code, Codex, Cursor) point at `/mcp` — see
+  [Using it from a client](#using-it-from-a-client).
+
+A checkout of this repository is *not* the running agent. Editing files
+locally changes nothing until the branch is pushed; conversely, a stale clone
+that is wired up as a local stdio MCP server will serve old behavior while the
+deployment is current. Keep exactly one clone for editing, and prefer the HTTP
+config below over stdio unless you are deliberately testing local changes.
+
 ## Deploying to Railway
 
 Push this directory as its own Railway service (`Dockerfile` + `railway.json`
@@ -96,7 +126,7 @@ automatically; the container listens on it and answers `/health`.
 {
   "mcpServers": {
     "vast-agent": {
-      "url": "https://<your-railway-app>.up.railway.app/mcp",
+      "url": "https://vast-agent-production.up.railway.app/mcp",
       "headers": { "Authorization": "Bearer ${VAST_AGENT_ACCESS_TOKEN}" }
     }
   }
