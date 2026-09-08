@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import { rootCertificates } from "node:tls";
 import { Agent } from "undici";
@@ -5,6 +6,7 @@ import { config } from "../core/config.js";
 
 const VAST_ROOT_CA_URL = "https://console.vast.ai/static/jvastai_root.cer";
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+const MAX_INIT_IMAGE_BYTES = 8 * 1024 * 1024;
 let vastWorkerAgentPromise: Promise<Agent> | undefined;
 
 export function isPublicIpv4(ip: string): boolean {
@@ -42,6 +44,33 @@ async function workerFetch(url: URL, init: RequestInit): Promise<Response> {
   if (url.protocol !== "https:") return fetch(url, init);
   const dispatcher = await vastWorkerAgent();
   return fetch(url, { ...init, dispatcher } as RequestInit & { dispatcher: Agent });
+}
+
+function rawImageBase64(value: string): string {
+  const match = value.trim().match(/^data:image\/(?:png|jpe?g|webp);base64,([a-z0-9+/=\s]+)$/i);
+  return (match?.[1] ?? value).replace(/\s+/g, "");
+}
+
+async function uploadReferenceImage(worker: URL, encoded: string, signal: AbortSignal): Promise<string | null> {
+  const bytes = Buffer.from(rawImageBase64(encoded), "base64");
+  if (bytes.length < 24 || bytes.length > MAX_INIT_IMAGE_BYTES) return null;
+  const filename = `AKIRA-reference-${randomUUID()}.png`;
+  const form = new FormData();
+  form.append("image", new Blob([bytes], { type: "image/png" }), filename);
+  form.append("type", "input");
+  form.append("overwrite", "true");
+  const response = await workerFetch(new URL("/upload/image", worker), {
+    method: "POST",
+    body: form,
+    signal,
+    redirect: "error",
+  });
+  if (!response.ok) return null;
+  const uploaded = await response.json() as Record<string, unknown>;
+  const name = typeof uploaded.name === "string" ? uploaded.name.trim() : "";
+  const subfolder = typeof uploaded.subfolder === "string" ? uploaded.subfolder.trim() : "";
+  if (!name || name.includes("..") || /[\\/]/.test(name) || subfolder.includes("..") || subfolder.includes("\\")) return null;
+  return subfolder ? `${subfolder.replace(/^\/+|\/+$/g, "")}/${name}` : name;
 }
 
 function outputAssets(body: Record<string, unknown>): Record<string, unknown>[] {
@@ -92,7 +121,15 @@ async function fetchWorkerImage(worker: URL, body: Record<string, unknown>, sign
   if (bytes.length < 24 || bytes.length > MAX_RESPONSE_BYTES) throw new Error("Worker /view returned an invalid or oversized image.");
   return { mimeType, base64: bytes.toString("base64") };
 }
-export async function runInference(input: { endpoint: string; path: string; payload: Record<string, unknown>; cost: number; timeoutSeconds: number }) {
+export async function runInference(input: {
+  endpoint: string;
+  path: string;
+  payload: Record<string, unknown>;
+  cost: number;
+  timeoutSeconds: number;
+  initImageBase64?: string;
+  attachInitImage?: (filename: string) => Record<string, unknown>;
+}) {
   if (!config.vastApiKey) throw new Error("VAST_API_KEY is not configured.");
   if (input.payload.stream === true) throw new Error("Use stream:false; job results are delivered complete.");
   const deadline = Date.now() + input.timeoutSeconds * 1000;
@@ -112,10 +149,15 @@ export async function runInference(input: { endpoint: string; path: string; payl
   if (!assignment) throw new Error("No ready worker before the timeout. Check serverless endpoint/workergroup scaling and provisioning.");
   const base = await workerUrl(String(assignment.url));
   if (!assignment.signature || assignment.reqnum === undefined) throw new Error("Incomplete worker authentication from Vast.");
+  let payload = input.payload;
+  if (input.initImageBase64 && input.attachInitImage) {
+    const filename = await uploadReferenceImage(base, input.initImageBase64, AbortSignal.timeout(Math.max(1, deadline - Date.now())));
+    if (filename) payload = input.attachInitImage(filename);
+  }
   const url = new URL(input.path, base);
   const response = await workerFetch(url, {
     method: "POST", headers: { "Content-Type": "application/json" }, redirect: "error",
-    body: JSON.stringify({ auth_data: assignment, payload: input.payload }),
+    body: JSON.stringify({ auth_data: assignment, payload }),
     signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
   });
   // Never retry this POST: a lost response can still represent a billed generation.
