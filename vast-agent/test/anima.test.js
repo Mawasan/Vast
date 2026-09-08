@@ -21,12 +21,16 @@ test("Anima workflow uses UNETLoader and model-only LoRAs in order", () => {
   ], { prompt: "1girl", seed: 42 });
   assert.equal(workflow["1"].class_type, "UNETLoader");
   assert.equal(workflow["1"].inputs.unet_name, "oneObsessionAnima_v40.safetensors");
+  assert.equal(workflow["2"].inputs.type, "qwen_image");
   assert.equal(workflow["4"].class_type, "LoraLoaderModelOnly");
   assert.deepEqual(workflow["4"].inputs.model, ["1", 0]);
   assert.equal(workflow["4"].inputs.strength_model, 0.55);
   assert.deepEqual(workflow["5"].inputs.model, ["4", 0]);
   const sampler = Object.values(workflow).find((node) => node.class_type === "KSampler");
   assert.deepEqual(sampler.inputs.model, ["5", 0]);
+  assert.equal(sampler.inputs.sampler_name, "euler");
+  const latent = Object.values(workflow).find((node) => node.class_type === "EmptySD3LatentImage");
+  assert.ok(latent);
   assert.equal(Object.values(workflow).at(-1).class_type, "SaveImage");
 });
 
@@ -37,6 +41,7 @@ test("Anima workflow uses attached text encoder and VAE resources", () => {
     { ...base, name: "vae", role: "vae", filename: "custom-vae.safetensors", targetPath: "/workspace/ComfyUI/models/vae" },
   ], { prompt: "1girl" });
   assert.equal(workflow["2"].inputs.clip_name, "custom-qwen.safetensors");
+  assert.equal(workflow["2"].inputs.type, "qwen_image");
   assert.equal(workflow["3"].inputs.vae_name, "custom-vae.safetensors");
 });
 
