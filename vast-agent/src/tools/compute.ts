@@ -17,6 +17,7 @@ const cost = z.number().finite().nonnegative().default(100).describe("Estimated 
 const timeoutSeconds = z.number().int().min(10).max(1800).default(600);
 const preview = (action: string, details: unknown) => ({ status: "confirmation_required", action, details, message: "Set confirm:true once this operation is authorized. Existing explicit authorization is sufficient." });
 const inferenceShape = { requestId, endpoint, cost, timeoutSeconds, confirm };
+const initImageBase64 = z.string().min(24).max(16_000_000).optional().describe("Optional character avatar as raw base64 or a data-URL. Uploaded to the assigned worker and used as an img2img identity reference.");
 /**
  * Which of a template's LoRAs a single request wants. A template that backs
  * one shared endpoint carries every LoRA, so the caller picks per image.
@@ -55,7 +56,7 @@ export const computeTools: ToolDef[] = [
       const args = { ...input, path: "/generate/sync", payload: { input: { request_id: requestId, workflow_json: workflow } } };
       return confirm ? submitJob(requestId, "image", args, () => runInference(args)) : preview("image_generation", { endpoint: input.endpoint });
     } }),
-  def({ name: "vast_generate_anima_image", description: "Generate an image with an AKIRA Anima template on an existing Vast Serverless ComfyUI endpoint. Builds the correct UNET/Anima workflow automatically and chains the LoRAs chosen in `loras`, or every attached LoRA at its saved weight when that is omitted. Returns a durable job; poll vast_get_job.",
+  def({ name: "vast_generate_anima_image", description: "Generate an image with an AKIRA Anima template on an existing Vast Serverless ComfyUI endpoint. Builds the correct UNET/Anima workflow automatically and chains the LoRAs chosen in `loras`, or every attached LoRA at its saved weight when that is omitted. Pass `initImageBase64` to condition on a character avatar. Returns a durable job; poll vast_get_job.",
     inputShape: {
       ...inferenceShape,
       template: z.string().min(1),
@@ -65,21 +66,28 @@ export const computeTools: ToolDef[] = [
       height: z.number().int().min(512).max(2048).multipleOf(64).default(1152),
       steps: z.number().int().min(1).max(100).default(35),
       cfg: z.number().finite().min(0).max(30).default(4.5),
-      samplerName: z.string().default("er_sde"),
+      samplerName: z.string().default("euler"),
       scheduler: z.string().default("simple"),
       seed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
       loras: loraSelection,
+      initImageBase64,
     },
-    handler: async ({ requestId, confirm, template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, ...input }) => {
-      const operation = { template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, ...input };
-      if (!confirm) return preview("anima_image_generation", { endpoint: input.endpoint, template, width, height });
+    handler: async ({ requestId, confirm, template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, initImageBase64, ...input }) => {
+      const operation = { template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, initImageBase64, ...input };
+      if (!confirm) return preview("anima_image_generation", { endpoint: input.endpoint, template, width, height, hasInitImage: Boolean(initImageBase64) });
       return submitJob(requestId, "anima_image", operation, async () => {
         const resources = selectLoras(await listModelsInTemplate(template), loras);
-        const workflow = buildAnimaApiWorkflow(resources, { prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed });
-        return runInference({ ...input, path: "/generate/sync", payload: { input: { request_id: requestId, workflow_json: workflow } } });
+        const options = { prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed };
+        return runInference({
+          ...input,
+          path: "/generate/sync",
+          payload: { input: { request_id: requestId, workflow_json: buildAnimaApiWorkflow(resources, options) } },
+          initImageBase64,
+          attachInitImage: (filename) => ({ input: { request_id: requestId, workflow_json: buildAnimaApiWorkflow(resources, { ...options, initImage: filename }) } }),
+        });
       });
     } }),
-  def({ name: "vast_generate_template_image", description: "Generate an image from any AKIRA Anima or SDXL/Illustrious template on its matching Vast Serverless endpoint. Builds the family-correct workflow. Pass `loras` to choose which of the template's LoRAs apply; omitted, every attached LoRA is chained in order. Returns a durable job; poll vast_get_job.",
+  def({ name: "vast_generate_template_image", description: "Generate an image from any AKIRA Anima or SDXL/Illustrious template on its matching Vast Serverless endpoint. Builds the family-correct workflow. Pass `loras` to choose which of the template's LoRAs apply; omitted, every attached LoRA is chained in order. Pass `initImageBase64` to keep the chatting character's avatar as the identity reference. Returns a durable job; poll vast_get_job.",
     inputShape: {
       ...inferenceShape,
       template: z.string().min(1),
@@ -93,19 +101,26 @@ export const computeTools: ToolDef[] = [
       scheduler: z.string().optional(),
       seed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
       loras: loraSelection,
+      initImageBase64,
     },
-    handler: async ({ requestId, confirm, template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, ...input }) => {
-      const operation = { template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, ...input };
-      if (!confirm) return preview("template_image_generation", { endpoint: input.endpoint, template, width: width ?? "family default", height: height ?? "family default" });
+    handler: async ({ requestId, confirm, template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, initImageBase64, ...input }) => {
+      const operation = { template, prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed, loras, initImageBase64, ...input };
+      if (!confirm) return preview("template_image_generation", { endpoint: input.endpoint, template, width: width ?? "family default", height: height ?? "family default", hasInitImage: Boolean(initImageBase64) });
       return submitJob(requestId, "template_image", operation, async () => {
         const resources = selectLoras(await listModelsInTemplate(template), loras);
         const base = resources.find((resource) => resource.role === "base");
         if (!base) throw new Error("The selected template has no attached base model.");
         const options = { prompt, negativePrompt, width, height, steps, cfg, samplerName, scheduler, seed };
-        const workflow = base.targetPath.replace(/\\/g, "/").includes("/diffusion_models")
-          ? buildAnimaApiWorkflow(resources, options)
-          : buildSdxlApiWorkflow(resources, options);
-        return runInference({ ...input, path: "/generate/sync", payload: { input: { request_id: requestId, workflow_json: workflow } } });
+        const build = (initImage?: string) => base.targetPath.replace(/\\/g, "/").includes("/diffusion_models")
+          ? buildAnimaApiWorkflow(resources, { ...options, initImage })
+          : buildSdxlApiWorkflow(resources, { ...options, initImage });
+        return runInference({
+          ...input,
+          path: "/generate/sync",
+          payload: { input: { request_id: requestId, workflow_json: build() } },
+          initImageBase64,
+          attachInitImage: (filename) => ({ input: { request_id: requestId, workflow_json: build(filename) } }),
+        });
       });
     } }),
   def({ name: "vast_get_job", description: "Get the durable result of a rent/inference job after reconnecting. running: poll again; completed: inspect result; unknown: inspect Vast before retrying. A server restart never automatically replays a billed operation.", inputShape: { requestId }, handler: async ({ requestId }) => getJob(requestId) }),
