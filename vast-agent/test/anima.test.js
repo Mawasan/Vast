@@ -52,6 +52,15 @@ test("Anima workflow rejects an SDXL checkpoint template", () => {
   );
 });
 
+test("Anima workflow encodes a character avatar instead of an empty latent", () => {
+  const workflow = buildAnimaApiWorkflow([base], { prompt: "1girl", initImage: "AKIRA-reference.png" });
+  assert.ok(Object.values(workflow).some((node) => node.class_type === "LoadImage" && node.inputs.image === "AKIRA-reference.png"));
+  assert.ok(Object.values(workflow).some((node) => node.class_type === "VAEEncode"));
+  const sampler = Object.values(workflow).find((node) => node.class_type === "KSampler");
+  assert.equal(sampler.inputs.denoise, 0.68);
+  assert.equal(Object.values(workflow).some((node) => node.class_type === "EmptySD3LatentImage"), false);
+});
+
 test("SDXL workflow chains model and CLIP through every LoRA", () => {
   const workflow = buildSdxlApiWorkflow([
     { ...base, role: "base", filename: "illustrious.safetensors", targetPath: "/workspace/ComfyUI/models/checkpoints" },
@@ -65,4 +74,16 @@ test("SDXL workflow chains model and CLIP through every LoRA", () => {
   assert.ok(encoders.every((node) => JSON.stringify(node.inputs.clip) === JSON.stringify(["2", 1])));
   const sampler = Object.values(workflow).find((node) => node.class_type === "KSampler");
   assert.deepEqual(sampler.inputs.model, ["2", 0]);
+});
+
+test("SDXL workflow encodes a character avatar as img2img identity", () => {
+  const workflow = buildSdxlApiWorkflow(
+    [{ ...base, role: "base", filename: "hassaku.safetensors", targetPath: "/workspace/ComfyUI/models/checkpoints" }],
+    { prompt: "1girl", initImage: "AKIRA-reference.png" },
+  );
+  const load = Object.values(workflow).find((node) => node.class_type === "LoadImage");
+  assert.equal(load.inputs.image, "AKIRA-reference.png");
+  const sampler = Object.values(workflow).find((node) => node.class_type === "KSampler");
+  assert.equal(sampler.inputs.denoise, 0.68);
+  assert.equal(Object.values(workflow).some((node) => node.class_type === "EmptyLatentImage"), false);
 });
